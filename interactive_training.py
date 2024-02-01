@@ -26,6 +26,11 @@ import os
 import pandas as pd
 import mokka
 
+pg.setConfigOption('background', 'w')
+pg.setConfigOption('foreground', 'k')
+pg.setConfigOptions(antialias=True)
+
+vhex = np.vectorize(hex)
 
 # The idea here is to split the code two-fold
 
@@ -101,22 +106,41 @@ class Window(QMainWindow, Ui_MainWindow):
 
     def addQtGraphItems(self):
         # Configure scatter_plot
-        self.scatter = pg.ScatterPlotItem(size=10, brush=pg.mkBrush(255, 255, 255, 120))
+        self.scatter = pg.ScatterPlotItem(size=10, brush=pg.mkBrush(0,0,0, 120))
+        self.labeltexts = [pg.TextItem() for _ in range(2**4)]
+        for label in self.labeltexts:
+            self.constellation_widget.addItem(label)
+
         self.constellation_widget.addItem(self.scatter)
         self.constellation_widget.setAspectLocked(1.0)
         self.constellation_widget.setXRange(-1.5, 1.5)
         self.constellation_widget.setYRange(-1.5, 1.5)
+        self.constellation_widget.getPlotItem().setLabel("bottom", "Real Part")
+        self.constellation_widget.getPlotItem().setLabel("left", "Imaginary Part")
+        self.constellation_widget.getPlotItem().getAxis("left").setTickSpacing(major=1.0, minor=0.5)
+        self.constellation_widget.getPlotItem().getAxis("left").setGrid(128)
+        self.constellation_widget.getPlotItem().getAxis("bottom").setTickSpacing(major=1.0, minor=0.5)
+        self.constellation_widget.getPlotItem().getAxis("bottom").setGrid(128)
         # self.constellation_widget.heightForWidth = lambda self, w: w
         # self.constellation_widget.sizePolicy().setHeightForWidth(True)
 
-        self.performance = pg.PlotCurveItem(size=10)
+        self.performance = pg.PlotCurveItem(size=10, pen=pg.mkPen("k", width=3))
+        # self.performance.setPen(pg.mkPen("k", width=2.5))
         self.plot_widget.addItem(self.performance)
         self.plot_widget.setYRange(0, 4)
+        self.plot_widget.setXRange(0, 1000)
+        self.plot_widget.getPlotItem().setLabel("left", "BMI (bit/symbol)")
+        self.plot_widget.getPlotItem().setLabel("bottom", "Epoch")
+        self.plot_widget.getPlotItem().getAxis("left").setGrid(128)
 
     def configureGUI(self):
         default_bits_per_symbol = 4
         default_channels = ["AWGN", "Wiener Phase Noise", "Optical Channel"]
-        default_shaping_type = ["Geometric", "Probabilistic", "Joint Geometric & Probabilistic"]
+        default_shaping_type = [
+            "Geometric",
+            "Probabilistic",
+            "Joint Geometric & Probabilistic",
+        ]
         default_objective_functions = ["BMI", "GMI"]
 
         self.bitpersymbol_box.setValue(default_bits_per_symbol)
@@ -129,18 +153,18 @@ class Window(QMainWindow, Ui_MainWindow):
         constellation_array = np.concatenate(
             (constellation.real[:, None], constellation.imag[:, None]), axis=1
         )
-        # bitstrings = [str(s) for s in mokka.utils.hex2bits(labels, 6)]
+        labels = [s[2:] for s in vhex(np.arange(2**4))]
+        bitstrings = [str(s) for s in mokka.utils.hex2bits(labels, 4)]
         self.scatter.setData(pos=constellation_array)
-        # for bitstring, point, label in zip(bitstrings, constellation, self.labeltexts):
-        #     label.setText(bitstring)
-        #     label.setPos(float(point[0]), float(point[1]))
+        for bitstring, point, label in zip(bitstrings, constellation, self.labeltexts):
+            label.setText(bitstring)
+            label.setPos(float(point.real), float(point.imag))
 
     @Slot()
     def handleProgress(self, progress, result):
         self.epochs.append(progress)
         self.bmi.append(result)
         self.performance.setData(self.epochs, self.bmi)
-
 
     def runTraining(self):
         self.thread = QThread()

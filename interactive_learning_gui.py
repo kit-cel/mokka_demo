@@ -119,6 +119,13 @@ class Ui_MainWindow(object):
         self.frame_5.setObjectName(u"frame_5")
         self.frame_5.setFrameShape(QFrame.StyledPanel)
         self.frame_5.setFrameShadow(QFrame.Raised)
+        self.horizontalLayout_3 = QHBoxLayout(self.frame_5)
+        self.horizontalLayout_3.setObjectName(u"horizontalLayout_3")
+        self.pushButton = QPushButton(self.frame_5)
+        self.pushButton.setObjectName(u"pushButton")
+
+        self.horizontalLayout_3.addWidget(self.pushButton)
+
 
         self.horizontalLayout_2.addWidget(self.frame_5)
 
@@ -162,6 +169,12 @@ class Ui_MainWindow(object):
 
         self.plot_widget = PlotWidget(self.groupBox_2)
         self.plot_widget.setObjectName(u"plot_widget")
+        sizePolicy1 = QSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        sizePolicy1.setHorizontalStretch(0)
+        sizePolicy1.setVerticalStretch(0)
+        sizePolicy1.setHeightForWidth(self.plot_widget.sizePolicy().hasHeightForWidth())
+        self.plot_widget.setSizePolicy(sizePolicy1)
+        self.plot_widget.setMinimumSize(QSize(0, 500))
 
         self.horizontalLayout.addWidget(self.plot_widget)
 
@@ -195,6 +208,8 @@ class Ui_MainWindow(object):
         self.label_2.setText(QCoreApplication.translate("MainWindow", u"Channel", None))
         self.label_3.setText(QCoreApplication.translate("MainWindow", u"Shaping Type", None))
         self.label_4.setText(QCoreApplication.translate("MainWindow", u"Objective function", None))
+        self.pushButton.setText(QCoreApplication.translate("MainWindow", u"Channel\n"
+"Params", None))
         self.reset_btn.setText(QCoreApplication.translate("MainWindow", u"Reset", None))
         self.run_btn.setText(QCoreApplication.translate("MainWindow", u"Run", None))
         self.groupBox_2.setTitle(QCoreApplication.translate("MainWindow", u"Plots", None))

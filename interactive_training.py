@@ -47,10 +47,11 @@ class Training(QObject):
     constellation = Signal(object)
     stop = False
 
-    def __init__(self):
+    def __init__(self, max_epoch=None):
         """"""
         super(Training, self).__init__()
         self.model = AWGNAutoencoder()
+        self.max_epoch = None
 
     @Slot()
     def killed(self):
@@ -60,6 +61,8 @@ class Training(QObject):
     def run(self):
         epoch = 0
         while True:
+            if self.max_epoch is not None and epoch == self.max_epoch:
+                return
             if self.thread().isInterruptionRequested():
                 return
             epoch += 1

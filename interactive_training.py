@@ -2,6 +2,7 @@
 
 from interactive_learning_gui import Ui_MainWindow
 from awgn_autoencoder import AWGNAutoencoder, ShapingAutoencoder
+from multi_config_dialog import MultiConfigDialog
 
 """Plot Constellation and animate it."""
 from PySide6.QtWidgets import (
@@ -20,7 +21,16 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6 import QtUiTools
 from PySide6.QtGui import QIcon, QImage, QPixmap
-from PySide6.QtCore import Qt, QPropertyAnimation, QObject, Signal, QFile, QThread, Slot, QSize
+from PySide6.QtCore import (
+    Qt,
+    QPropertyAnimation,
+    QObject,
+    Signal,
+    QFile,
+    QThread,
+    Slot,
+    QSize,
+)
 
 import argparse
 import sys
@@ -28,14 +38,13 @@ import os
 import pandas as pd
 import mokka
 
-from pyqtconfig import QSettingsManager
+from pyqtconfig import ConfigManager
 
-pg.setConfigOption('background', 'w')
-pg.setConfigOption('foreground', 'k')
+pg.setConfigOption("background", "w")
+pg.setConfigOption("foreground", "k")
 pg.setConfigOptions(antialias=True)
 
 vhex = np.vectorize(hex)
-
 
 
 # The idea here is to split the code two-fold
@@ -100,9 +109,8 @@ class Window(QMainWindow, Ui_MainWindow):
         # setting title
         self.setWindowTitle("MOKka Demo")
 
-        # Set parameters
-
-        self.settings = QSettingsManager()
+        # Settings
+        self.configureSettings()
 
         # setting geometry
         self.setGeometry(100, 100, 1200, 500)
@@ -127,7 +135,7 @@ class Window(QMainWindow, Ui_MainWindow):
 
     def addQtGraphItems(self):
         # Configure scatter_plot
-        self.scatter = pg.ScatterPlotItem(size=10, brush=pg.mkBrush(0,0,0, 120))
+        self.scatter = pg.ScatterPlotItem(size=10, brush=pg.mkBrush(0, 0, 0, 120))
         self.labeltexts = [pg.TextItem() for _ in range(2**4)]
         for label in self.labeltexts:
             self.constellation_widget.addItem(label)
@@ -138,9 +146,13 @@ class Window(QMainWindow, Ui_MainWindow):
         self.constellation_widget.setYRange(-1.5, 1.5)
         self.constellation_widget.getPlotItem().setLabel("bottom", "Real Part")
         self.constellation_widget.getPlotItem().setLabel("left", "Imaginary Part")
-        self.constellation_widget.getPlotItem().getAxis("left").setTickSpacing(major=1.0, minor=0.5)
+        self.constellation_widget.getPlotItem().getAxis("left").setTickSpacing(
+            major=1.0, minor=0.5
+        )
         self.constellation_widget.getPlotItem().getAxis("left").setGrid(128)
-        self.constellation_widget.getPlotItem().getAxis("bottom").setTickSpacing(major=1.0, minor=0.5)
+        self.constellation_widget.getPlotItem().getAxis("bottom").setTickSpacing(
+            major=1.0, minor=0.5
+        )
         self.constellation_widget.getPlotItem().getAxis("bottom").setGrid(128)
         # self.constellation_widget.heightForWidth = lambda self, w: w
         # self.constellation_widget.sizePolicy().setHeightForWidth(True)
@@ -154,8 +166,8 @@ class Window(QMainWindow, Ui_MainWindow):
         self.plot_widget.getPlotItem().setLabel("bottom", "Epoch")
         self.plot_widget.getPlotItem().getAxis("left").setGrid(128)
 
-    def configureGUI(self):
-        default_bits_per_symbol = 4
+    def configureSettings(self):
+        script_dir = os.path.dirname(__file__)
         max_bits_per_symbol = 8
         default_channels = ["AWGN", "Wiener Phase Noise", "Optical Channel"]
         default_shaping_type = [
@@ -165,16 +177,79 @@ class Window(QMainWindow, Ui_MainWindow):
         ]
         default_objective_functions = ["BMI", "GMI"]
 
+        default_settings = {
+            "simulation_type": "shaping"
+        }
+        self.settings = ConfigManager(
+            filename=os.path.join(script_dir, "settings", "settings.json")
+        )
+        self.settings.set_defaults(default_settings)
+        self.shaping_settings = ConfigManager(
+            filename=os.path.join(script_dir, "settings", "shaping_settings.json")
+        )
+        shaping_default_settings = {
+            "bits_per_symbol": 4,
+            "lr": 1e-3,
+            "demapper": "Neural",
+            "channel": "AWGN",
+            "cpe": "None",
+            "objective": "BMI",
+            "type": "Geometric",
+        }
+        shaping_default_metadata = {
+            "channel": {
+                "preferred_map_dict": {
+                    "AWGN": 0,
+                    "Wiener Phase Noise": 1,
+                    "Optical Channel": 2,
+                }
+            },
+            "demapper": {
+                "preferred_map_dict": {
+                    "Neural": 0,
+                    "Gaussian": 1,
+                    "Separated Neural": 2,
+                    "Separated Gaussian": 3,
+                }
+            },
+            "cpe": {
+                "preferred_map_dict": {
+                    "None": 0,
+                    "BPS": 0,
+                    "V&V": 0,
+                }
+            },
+            "objective":{
+                "preferred_map_dict": {
+                    "BMI": 0,
+                    "MI": 1
+                }
+            },
+            "type": {
+                "preferred_map_dict": {
+                    "Geometric": 0,
+                    "Probabilistic": 1,
+                    "Joint Geometric & Probabilistic": 2,
+                }
+            }
+        }
+        self.shaping_settings.set_many_metadata(shaping_default_metadata)
+        self.shaping_settings.set_defaults(shaping_default_settings)
+        equalization_default_settings = {}
+        self.equalization_settings = ConfigManager(
+            filename=os.path.join(script_dir, "settings", "equalization_settings.json")
+        )
+
+    def configureGUI(self):
         # Configure options for Shaping
-        self.bitpersymbol_box.setValue(default_bits_per_symbol)
-        self.bitpersymbol_box.setMaximum(max_bits_per_symbol)
-        self.bitpersymbol_box.setMinimum(1)
-        self.channel_box.addItems(default_channels)
-        self.shaping_box.addItems(default_shaping_type)
-        self.objective_box.addItems(default_objective_functions)
+        # self.bitpersymbol_box.setValue(default_bits_per_symbol)
+        # self.bitpersymbol_box.setMaximum(max_bits_per_symbol)
+        # self.bitpersymbol_box.setMinimum(1)
+        # self.channel_box.addItems(default_channels)
+        # self.shaping_box.addItems(default_shaping_type)
+        # self.objective_box.addItems(default_objective_functions)
 
         # Configure options for Equalization
-
 
         # Configure other GUI options
 
@@ -191,7 +266,7 @@ class Window(QMainWindow, Ui_MainWindow):
         pdf_doc.load("./assets/kitlogo_en_rgb.pdf")
         logo_size = pdf_doc.pagePointSize(0)
         logo_width = int(logo_height / logo_size.height() * logo_size.width())
-        kit_logo = pdf_doc.render(0, QSize(logo_width,logo_height))
+        kit_logo = pdf_doc.render(0, QSize(logo_width, logo_height))
         pdf_doc.load("./assets/erc_logo.pdf")
         logo_width = int(logo_height / logo_size.height() * logo_size.width())
         erc_logo = pdf_doc.render(0, QSize(logo_width, logo_height))
@@ -200,10 +275,10 @@ class Window(QMainWindow, Ui_MainWindow):
         self.kit_logo.setPixmap(QPixmap.fromImage(kit_logo))
 
         # Connect GUI controls to central settings register
-        self.settings.add_handler("bits_per_symbol", self.bitpersymbol_box)
-        self.settings.add_handler("channel", self.channel_box)
-        self.settings.add_handler("shaping_type", self.shaping_box)
-        self.settings.add_handler("shaping_objective", self.objective_box)
+        self.shaping_settings.add_handler("bits_per_symbol", self.bitpersymbol_box)
+        self.shaping_settings.add_handler("channel", self.channel_box)
+        self.shaping_settings.add_handler("type", self.shaping_box)
+        self.shaping_settings.add_handler("objective", self.objective_box)
 
         self.settings_group.setCurrentIndex(0)
 
@@ -215,12 +290,13 @@ class Window(QMainWindow, Ui_MainWindow):
         else:
             self.settings.set("simulation_type", "equalization")
 
-
     @Slot()
     def handleSettingsChange(self):
-        # Reconfigure GUI following a settings change
-        print(self.settings.as_dict())
-
+        # Reconfigure GUI following a settings change switch Tab if simulation_type is different
+        if self.settings.get("simulation_type") == "shaping":
+            self.settings_group.setCurrentIndex(0)
+        elif self.settings.get("simulation_type") == "equalization":
+            self.settings_group.setCurrentIndex(1)
 
     @Slot()
     def handleSimulationRunning(self, running):
@@ -230,8 +306,6 @@ class Window(QMainWindow, Ui_MainWindow):
         else:
             self.settings_group.setEnabled(True)
             self.settings_btn.setEnabled(True)
-
-
 
     @Slot()
     def plotConstellation(self, constellation):
@@ -278,7 +352,37 @@ class Window(QMainWindow, Ui_MainWindow):
         self.settings_group.currentChanged.connect(self.settings_tabChngd)
         self.settings.updated.connect(self.handleSettingsChange)
         self.simulation_running.connect(self.handleSimulationRunning)
+        self.settings_btn.pressed.connect(self.configDialog)
 
+    @Slot()
+    def configDialog(self):
+        if self.settings.get("simulation_type") == "shaping":
+            print(self.settings.as_dict())
+            config_dialog = MultiConfigDialog(
+                self.settings, self.shaping_settings, cols=2
+            )
+            config_dialog.accepted.connect(
+                lambda: (
+                    self.update_config(self.settings, config_dialog.config1),
+                    self.update_config(self.shaping_settings, config_dialog.config2),
+                )
+            )
+        elif self.settings.get("simulation_type") == "equalization":
+            config_dialog = MultiConfigDialog(
+                self.settings, self.equalization_settings, cols=2
+            )
+            config_dialog.accepted.connect(
+                lambda: (
+                    self.update_config(self.settings, config_dialog.config1),
+                    self.update_config(
+                        self.equalization_settings, config_dialog.config2
+                    ),
+                )
+            )
+
+    def update_config(self, config, new_config):
+        config.set_many(new_config.as_dict())
+        config.save()
 
     @Slot()
     def runBtn_clicked(self):
@@ -307,6 +411,11 @@ class Window(QMainWindow, Ui_MainWindow):
         self.bmi = []
         self.results = {}
 
+    def closeEvent(self, event):
+        self.settings.save()
+        self.shaping_settings.save()
+        self.equalization_settings.save()
+        event.accept()
 
 
 if __name__ == "__main__":

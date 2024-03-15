@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 from interactive_learning_gui import Ui_MainWindow
-from awgn_autoencoder import AWGNAutoencoder
+from awgn_autoencoder import AWGNAutoencoder, ShapingAutoencoder
 
 """Plot Constellation and animate it."""
 from PySide6.QtWidgets import (
@@ -13,12 +13,14 @@ from PySide6.QtWidgets import (
     QSlider,
 )
 
+from PySide6.QtPdf import QPdfDocument
+
 import numpy as np
 
 import pyqtgraph as pg
 from PySide6 import QtUiTools
-from PySide6.QtGui import QIcon
-from PySide6.QtCore import Qt, QPropertyAnimation, QObject, Signal, QFile, QThread, Slot
+from PySide6.QtGui import QIcon, QImage, QPixmap
+from PySide6.QtCore import Qt, QPropertyAnimation, QObject, Signal, QFile, QThread, Slot, QSize
 
 import argparse
 import sys
@@ -26,11 +28,15 @@ import os
 import pandas as pd
 import mokka
 
+from pyqtconfig import QSettingsManager
+
 pg.setConfigOption('background', 'w')
 pg.setConfigOption('foreground', 'k')
 pg.setConfigOptions(antialias=True)
 
 vhex = np.vectorize(hex)
+
+
 
 # The idea here is to split the code two-fold
 
@@ -47,11 +53,20 @@ class Training(QObject):
     constellation = Signal(object)
     stop = False
 
-    def __init__(self, max_epoch=None):
+    def __init__(self, settings, max_epoch=None):
         """"""
         super(Training, self).__init__()
-        self.model = AWGNAutoencoder()
+        # Here we can handle the settings to configure correct Training
         self.max_epoch = None
+        self.settings = settings
+        self.model = ShapingAutoencoder(self.settings.as_dict())
+
+    # Configure a Slot to handle changes in the settings object
+    @Slot()
+    def reconfigure(self, settings):
+        self.settings = settings
+        self.model.update_settings(self.settings)
+        # Simulation type (shaping or adaptive equalization)
 
     @Slot()
     def killed(self):
@@ -76,15 +91,18 @@ class Training(QObject):
 
 class Window(QMainWindow, Ui_MainWindow):
     stop_simulation = Signal()
+    simulation_running = Signal(bool)
 
     def __init__(self):
         QMainWindow.__init__(self)
         self.setupUi(self)
 
         # setting title
-        self.setWindowTitle("Joint Geometric & Probabilistic Shaping")
+        self.setWindowTitle("MOKka Demo")
 
         # Set parameters
+
+        self.settings = QSettingsManager()
 
         # setting geometry
         self.setGeometry(100, 100, 1200, 500)
@@ -138,6 +156,7 @@ class Window(QMainWindow, Ui_MainWindow):
 
     def configureGUI(self):
         default_bits_per_symbol = 4
+        max_bits_per_symbol = 8
         default_channels = ["AWGN", "Wiener Phase Noise", "Optical Channel"]
         default_shaping_type = [
             "Geometric",
@@ -146,10 +165,73 @@ class Window(QMainWindow, Ui_MainWindow):
         ]
         default_objective_functions = ["BMI", "GMI"]
 
+        # Configure options for Shaping
         self.bitpersymbol_box.setValue(default_bits_per_symbol)
+        self.bitpersymbol_box.setMaximum(max_bits_per_symbol)
+        self.bitpersymbol_box.setMinimum(1)
         self.channel_box.addItems(default_channels)
         self.shaping_box.addItems(default_shaping_type)
         self.objective_box.addItems(default_objective_functions)
+
+        # Configure options for Equalization
+
+
+        # Configure other GUI options
+
+        self.settings_group.setTabText(0, "Shaping")
+        self.settings_group.setTabText(1, "Equalization")
+
+        # Load logos to QPixMap and display them on the main window
+        logo_height = 60
+        pdf_doc = QPdfDocument()
+        pdf_doc.load("./assets/CEL_logo.pdf")
+        logo_size = pdf_doc.pagePointSize(0)
+        logo_width = int(logo_height / logo_size.height() * logo_size.width())
+        cel_logo = pdf_doc.render(0, QSize(logo_width, logo_height))
+        pdf_doc.load("./assets/kitlogo_en_rgb.pdf")
+        logo_size = pdf_doc.pagePointSize(0)
+        logo_width = int(logo_height / logo_size.height() * logo_size.width())
+        kit_logo = pdf_doc.render(0, QSize(logo_width,logo_height))
+        pdf_doc.load("./assets/erc_logo.pdf")
+        logo_width = int(logo_height / logo_size.height() * logo_size.width())
+        erc_logo = pdf_doc.render(0, QSize(logo_width, logo_height))
+        self.erc_logo.setPixmap(QPixmap.fromImage(erc_logo))
+        self.cel_logo.setPixmap(QPixmap.fromImage(cel_logo))
+        self.kit_logo.setPixmap(QPixmap.fromImage(kit_logo))
+
+        # Connect GUI controls to central settings register
+        self.settings.add_handler("bits_per_symbol", self.bitpersymbol_box)
+        self.settings.add_handler("channel", self.channel_box)
+        self.settings.add_handler("shaping_type", self.shaping_box)
+        self.settings.add_handler("shaping_objective", self.objective_box)
+
+        self.settings_group.setCurrentIndex(0)
+
+    @Slot()
+    def settings_tabChngd(self):
+        current_id = self.settings_group.currentIndex()
+        if current_id == 0:
+            self.settings.set("simulation_type", "shaping")
+        else:
+            self.settings.set("simulation_type", "equalization")
+
+
+    @Slot()
+    def handleSettingsChange(self):
+        # Reconfigure GUI following a settings change
+        print(self.settings.as_dict())
+
+
+    @Slot()
+    def handleSimulationRunning(self, running):
+        if running:
+            self.settings_group.setEnabled(False)
+            self.settings_btn.setEnabled(False)
+        else:
+            self.settings_group.setEnabled(True)
+            self.settings_btn.setEnabled(True)
+
+
 
     @Slot()
     def plotConstellation(self, constellation):
@@ -171,7 +253,7 @@ class Window(QMainWindow, Ui_MainWindow):
 
     def runTraining(self):
         self.thread = QThread()
-        self.worker = Training()
+        self.worker = Training(self.settings)
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run)
         self.worker.finished.connect(self.thread.quit)
@@ -193,24 +275,38 @@ class Window(QMainWindow, Ui_MainWindow):
     def hookGUIEvents(self):
         self.run_btn.clicked.connect(self.runBtn_clicked)
         self.reset_btn.clicked.connect(self.resetBtn_clicked)
+        self.settings_group.currentChanged.connect(self.settings_tabChngd)
+        self.settings.updated.connect(self.handleSettingsChange)
+        self.simulation_running.connect(self.handleSimulationRunning)
+
 
     @Slot()
     def runBtn_clicked(self):
         if self.run_btn.isFlat():
             self.thread.requestInterruption()
+            self.simulation_running.emit(False)
             self.run_btn.setFlat(False)
+            self.run_btn.setText("Run")
             return
         self.run_btn.setFlat(True)
+        self.run_btn.setText("Stop && Reset")
+        self.resetPlots()
         self.runTraining()
+        self.simulation_running.emit(True)
 
     @Slot()
     def resetBtn_clicked(self):
         # ResetPlots
+        self.resetPlots()
+
+    def resetPlots(self):
         self.constellation_widget.clear()
         self.plot_widget.clear()
         self.addQtGraphItems()
         self.epochs = []
         self.bmi = []
+        self.results = {}
+
 
 
 if __name__ == "__main__":

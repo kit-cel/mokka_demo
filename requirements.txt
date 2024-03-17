@@ -1,0 +1,4 @@
+mokka
+pyside6
+pandas
+pyqtconfig

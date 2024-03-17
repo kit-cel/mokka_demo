@@ -4,6 +4,8 @@ from interactive_learning_gui import Ui_MainWindow
 from awgn_autoencoder import AWGNAutoencoder, ShapingAutoencoder
 from multi_config_dialog import MultiConfigDialog
 
+import settings
+
 """Plot Constellation and animate it."""
 from PySide6.QtWidgets import (
     QWidget,
@@ -12,6 +14,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
     QSlider,
+    QComboBox,
 )
 
 from PySide6.QtPdf import QPdfDocument
@@ -168,18 +171,8 @@ class Window(QMainWindow, Ui_MainWindow):
 
     def configureSettings(self):
         script_dir = os.path.dirname(__file__)
-        max_bits_per_symbol = 8
-        default_channels = ["AWGN", "Wiener Phase Noise", "Optical Channel"]
-        default_shaping_type = [
-            "Geometric",
-            "Probabilistic",
-            "Joint Geometric & Probabilistic",
-        ]
-        default_objective_functions = ["BMI", "GMI"]
 
-        default_settings = {
-            "simulation_type": "shaping"
-        }
+        default_settings = {"simulation_type": "shaping"}
         self.settings = ConfigManager(
             filename=os.path.join(script_dir, "settings", "settings.json")
         )
@@ -190,48 +183,50 @@ class Window(QMainWindow, Ui_MainWindow):
         shaping_default_settings = {
             "bits_per_symbol": 4,
             "lr": 1e-3,
-            "demapper": "Neural",
-            "channel": "AWGN",
-            "cpe": "None",
-            "objective": "BMI",
-            "type": "Geometric",
+            "demapper": settings.Demapper.Neural,
+            "channel": settings.ShapingChannel.AWGN,
+            "cpe": settings.CPE.NONE,
+            "objective": settings.ShapingObjective.BMI,
+            "type": settings.ShapingType.Geometric,
         }
         shaping_default_metadata = {
             "channel": {
+                "preferred_handler": QComboBox,
                 "preferred_map_dict": {
-                    "AWGN": 0,
-                    "Wiener Phase Noise": 1,
-                    "Optical Channel": 2,
-                }
+                    "AWGN": settings.ShapingChannel.AWGN,
+                    "Wiener Phase Noise": settings.ShapingChannel.Wiener,
+                    "Optical Channel": settings.ShapingChannel.Optical,
+                },
             },
             "demapper": {
+                "preferred_handler": QComboBox,
                 "preferred_map_dict": {
-                    "Neural": 0,
-                    "Gaussian": 1,
-                    "Separated Neural": 2,
-                    "Separated Gaussian": 3,
-                }
+                    "Neural": settings.Demapper.Neural,
+                    "Gaussian": settings.Demapper.Gaussian,
+                    "Separated Neural": settings.Demapper.SepNeural,
+                    "Separated Gaussian": settings.Demapper.SepGaussian,
+                },
             },
             "cpe": {
                 "preferred_map_dict": {
-                    "None": 0,
-                    "BPS": 0,
-                    "V&V": 0,
+                    "None": settings.CPE.NONE,
+                    "BPS": settings.CPE.BPS,
+                    "V&V": settings.CPE.VV,
                 }
             },
-            "objective":{
+            "objective": {
                 "preferred_map_dict": {
-                    "BMI": 0,
-                    "MI": 1
+                    "BMI": settings.ShapingObjective.BMI,
+                    "MI": settings.ShapingObjective.MI,
                 }
             },
             "type": {
                 "preferred_map_dict": {
-                    "Geometric": 0,
-                    "Probabilistic": 1,
-                    "Joint Geometric & Probabilistic": 2,
+                    "Geometric": settings.ShapingType.Geometric,
+                    "Probabilistic": settings.ShapingType.Probabilistic,
+                    "Joint Geometric & Probabilistic": settings.ShapingType.Joint,
                 }
-            }
+            },
         }
         self.shaping_settings.set_many_metadata(shaping_default_metadata)
         self.shaping_settings.set_defaults(shaping_default_settings)
@@ -249,6 +244,9 @@ class Window(QMainWindow, Ui_MainWindow):
         # self.shaping_box.addItems(default_shaping_type)
         # self.objective_box.addItems(default_objective_functions)
 
+        # self.channel_box.addItems(
+        # list(self.shaping_settings.get_metadata("channel")["preferred_map_dict"].keys())
+        # )
         # Configure options for Equalization
 
         # Configure other GUI options
@@ -276,9 +274,15 @@ class Window(QMainWindow, Ui_MainWindow):
 
         # Connect GUI controls to central settings register
         self.shaping_settings.add_handler("bits_per_symbol", self.bitpersymbol_box)
-        self.shaping_settings.add_handler("channel", self.channel_box)
-        self.shaping_settings.add_handler("type", self.shaping_box)
-        self.shaping_settings.add_handler("objective", self.objective_box)
+        self.shaping_settings.add_handler(
+            "channel", self.channel_box, preferred_mapper=True
+        )
+        self.shaping_settings.add_handler(
+            "type", self.shaping_box, preferred_mapper=True
+        )
+        self.shaping_settings.add_handler(
+            "objective", self.objective_box, preferred_mapper=True
+        )
 
         self.settings_group.setCurrentIndex(0)
 
@@ -357,20 +361,22 @@ class Window(QMainWindow, Ui_MainWindow):
     @Slot()
     def configDialog(self):
         if self.settings.get("simulation_type") == "shaping":
-            print(self.settings.as_dict())
             config_dialog = MultiConfigDialog(
                 self.settings, self.shaping_settings, cols=2
             )
+            config_dialog.setWindowTitle("Settings")
             config_dialog.accepted.connect(
                 lambda: (
                     self.update_config(self.settings, config_dialog.config1),
                     self.update_config(self.shaping_settings, config_dialog.config2),
                 )
             )
+            config_dialog.exec()
         elif self.settings.get("simulation_type") == "equalization":
             config_dialog = MultiConfigDialog(
                 self.settings, self.equalization_settings, cols=2
             )
+            config_dialog.setWindowTitle("Settings")
             config_dialog.accepted.connect(
                 lambda: (
                     self.update_config(self.settings, config_dialog.config1),
@@ -379,6 +385,7 @@ class Window(QMainWindow, Ui_MainWindow):
                     ),
                 )
             )
+            config_dialog.exec()
 
     def update_config(self, config, new_config):
         config.set_many(new_config.as_dict())

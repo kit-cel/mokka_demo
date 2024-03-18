@@ -22,8 +22,6 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QFrame, QGridLayout,
     QSpinBox, QStatusBar, QTabWidget, QVBoxLayout,
     QWidget)
 
-from pyqtgraph import PlotWidget
-
 class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
         if not MainWindow.objectName():
@@ -230,36 +228,16 @@ class Ui_MainWindow(object):
         self.plot_box.setObjectName(u"plot_box")
         self.gridLayout = QGridLayout(self.plot_box)
         self.gridLayout.setObjectName(u"gridLayout")
-        self.constellation_widget = PlotWidget(self.plot_box)
-        self.constellation_widget.setObjectName(u"constellation_widget")
-        sizePolicy2 = QSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        sizePolicy2.setHorizontalStretch(0)
-        sizePolicy2.setVerticalStretch(0)
-        sizePolicy2.setHeightForWidth(self.constellation_widget.sizePolicy().hasHeightForWidth())
-        self.constellation_widget.setSizePolicy(sizePolicy2)
-        self.constellation_widget.setMinimumSize(QSize(500, 500))
-        self.constellation_widget.setBaseSize(QSize(300, 300))
-
-        self.gridLayout.addWidget(self.constellation_widget, 0, 0, 1, 1)
-
-        self.plot_widget = PlotWidget(self.plot_box)
-        self.plot_widget.setObjectName(u"plot_widget")
-        sizePolicy1.setHeightForWidth(self.plot_widget.sizePolicy().hasHeightForWidth())
-        self.plot_widget.setSizePolicy(sizePolicy1)
-        self.plot_widget.setMinimumSize(QSize(0, 500))
-
-        self.gridLayout.addWidget(self.plot_widget, 0, 1, 1, 1)
-
 
         self.verticalLayout.addWidget(self.plot_box)
 
         self.footer_area = QFrame(self.centralwidget)
         self.footer_area.setObjectName(u"footer_area")
-        sizePolicy3 = QSizePolicy(QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.Fixed)
-        sizePolicy3.setHorizontalStretch(0)
-        sizePolicy3.setVerticalStretch(0)
-        sizePolicy3.setHeightForWidth(self.footer_area.sizePolicy().hasHeightForWidth())
-        self.footer_area.setSizePolicy(sizePolicy3)
+        sizePolicy2 = QSizePolicy(QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.Fixed)
+        sizePolicy2.setHorizontalStretch(0)
+        sizePolicy2.setVerticalStretch(0)
+        sizePolicy2.setHeightForWidth(self.footer_area.sizePolicy().hasHeightForWidth())
+        self.footer_area.setSizePolicy(sizePolicy2)
         palette = QPalette()
         brush = QBrush(QColor(128, 128, 128, 255))
         brush.setStyle(Qt.SolidPattern)
@@ -302,18 +280,18 @@ class Ui_MainWindow(object):
 
         self.logo_area = QWidget(self.footer_area)
         self.logo_area.setObjectName(u"logo_area")
-        sizePolicy3.setHeightForWidth(self.logo_area.sizePolicy().hasHeightForWidth())
-        self.logo_area.setSizePolicy(sizePolicy3)
+        sizePolicy2.setHeightForWidth(self.logo_area.sizePolicy().hasHeightForWidth())
+        self.logo_area.setSizePolicy(sizePolicy2)
         self.horizontalLayout_7 = QHBoxLayout(self.logo_area)
         self.horizontalLayout_7.setObjectName(u"horizontalLayout_7")
         self.horizontalLayout_7.setContentsMargins(0, 0, 0, 0)
         self.erc_logo = QLabel(self.logo_area)
         self.erc_logo.setObjectName(u"erc_logo")
-        sizePolicy4 = QSizePolicy(QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.MinimumExpanding)
-        sizePolicy4.setHorizontalStretch(0)
-        sizePolicy4.setVerticalStretch(0)
-        sizePolicy4.setHeightForWidth(self.erc_logo.sizePolicy().hasHeightForWidth())
-        self.erc_logo.setSizePolicy(sizePolicy4)
+        sizePolicy3 = QSizePolicy(QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.MinimumExpanding)
+        sizePolicy3.setHorizontalStretch(0)
+        sizePolicy3.setVerticalStretch(0)
+        sizePolicy3.setHeightForWidth(self.erc_logo.sizePolicy().hasHeightForWidth())
+        self.erc_logo.setSizePolicy(sizePolicy3)
         self.erc_logo.setMinimumSize(QSize(50, 50))
         self.erc_logo.setAutoFillBackground(False)
 
@@ -321,8 +299,8 @@ class Ui_MainWindow(object):
 
         self.cel_logo = QLabel(self.logo_area)
         self.cel_logo.setObjectName(u"cel_logo")
-        sizePolicy4.setHeightForWidth(self.cel_logo.sizePolicy().hasHeightForWidth())
-        self.cel_logo.setSizePolicy(sizePolicy4)
+        sizePolicy3.setHeightForWidth(self.cel_logo.sizePolicy().hasHeightForWidth())
+        self.cel_logo.setSizePolicy(sizePolicy3)
         self.cel_logo.setMinimumSize(QSize(50, 50))
         self.cel_logo.setAutoFillBackground(False)
 
@@ -330,8 +308,8 @@ class Ui_MainWindow(object):
 
         self.kit_logo = QLabel(self.logo_area)
         self.kit_logo.setObjectName(u"kit_logo")
-        sizePolicy4.setHeightForWidth(self.kit_logo.sizePolicy().hasHeightForWidth())
-        self.kit_logo.setSizePolicy(sizePolicy4)
+        sizePolicy3.setHeightForWidth(self.kit_logo.sizePolicy().hasHeightForWidth())
+        self.kit_logo.setSizePolicy(sizePolicy3)
         self.kit_logo.setMinimumSize(QSize(50, 50))
         self.kit_logo.setBaseSize(QSize(0, 0))
         self.kit_logo.setAutoFillBackground(False)

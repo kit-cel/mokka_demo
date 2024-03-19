@@ -25,17 +25,17 @@ class EqualizerSimulation:
         self.update_config(config)
 
     def update_config(self, config):
-        self.mod = "64-QAM"
+        self.mod = config["constellation"]
         self.sps = 2
-        self.SNR = 24
+        self.SNR = config["SNR"]
         self.nu = 0.0270955
-        self.M = 25
+        self.M = config["eq_len"]
         self.theta_diff = 0
         self.theta = 0
         self.lr_optim = 0.003
         self.batch_len = 200
-        self.N_frame_max = 10000
-        self.num_frames = 100
+        self.N_frame_max = config["symbols_per_step"]
+        self.num_frames = config["num_frames"]
         self.flex_step = 10
         self.channel = "h0"
         self.symb_rate = 100000000000.0

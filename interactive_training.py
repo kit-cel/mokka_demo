@@ -143,7 +143,7 @@ class Training(QObject):
         with QMutexLocker(self.config_update):
             if self.settings["simulation_type"] != settings["simulation_type"]:
                 if self.thread() is not None:
-                  self.thread().requestInterruption()
+                    self.thread().requestInterruption()
                 time.sleep(0.1)
                 if settings["simulation_type"] == "shaping":
                     self.model = ShapingAutoencoder(self.settings)
@@ -173,8 +173,8 @@ class Training(QObject):
                 self.symbols1.emit(trained_constellation)
                 self.symbols2.emit(results["rx_signal_postcpe"].numpy())
             elif self.settings["simulation_type"] == "equalization":
-                self.symbols1.emit(results["rx_signal_posteq"].numpy()[0,:])
-                self.symbols2.emit(results["rx_signal_posteq"].numpy()[1,:])
+                self.symbols1.emit(results["rx_signal_posteq"].numpy()[0, :])
+                self.symbols2.emit(results["rx_signal_posteq"].numpy()[1, :])
                 self.progress_result.emit(epoch, results["bmi"])
 
 
@@ -252,9 +252,6 @@ class Window(QMainWindow, Ui_MainWindow):
                 self.scatter_widget2, size=2, color=(0, 150, 130, 120), pen=pg.mkPen()
             )
 
-
-
-
     def addQtGraphItems(self):
         # Configure plots for Shaping & Eq
 
@@ -280,7 +277,6 @@ class Window(QMainWindow, Ui_MainWindow):
         self.plot_widget.setMinimumSize(QSize(700, 500))
 
         self.gridLayout.addWidget(self.plot_widget, 0, 1, 2, 2)
-
 
         self.reconfigureGraphItems()
         self.performance = pg.PlotCurveItem(
@@ -402,10 +398,38 @@ class Window(QMainWindow, Ui_MainWindow):
         }
         self.shaping_settings.set_many_metadata(shaping_default_metadata)
         self.shaping_settings.set_defaults(shaping_default_settings)
-        equalization_default_settings = {}
+        equalization_default_settings = {
+            "SNR": 24.0,
+            "eq_len": 25,
+            "channel": "h0",
+            "constellation": "64-QAM",
+            "num_frames": 100,
+        }
+        equalization_default_metadata = {
+            "num_frames": {
+                "preferred_handler": QSpinBox,
+                "preferred_handler_fn": lambda handler: (handler.setRange(1, 1000), handler.setSingleStep(10))
+            },
+            "constellation": {
+                "preferred_handler": QComboBox,
+                "preferred_map_dict": {
+                    "64-QAM": "64-QAM",
+                    "16-QAM": "16-QAM",
+                    "QPSK": "QPSK",
+                },
+            },
+            "channel": {
+                "preferred_handler": QComboBox,
+                "preferred_map_dict": {
+                    "h0": "h0",
+                },
+            },
+        }
         self.equalization_settings = ConfigManager(
             filename=os.path.join(script_dir, "settings", "equalization_settings.json")
         )
+        self.equalization_settings.set_many_metadata(equalization_default_metadata)
+        self.equalization_settings.set_defaults(equalization_default_settings)
 
     def configureGUI(self):
         # Configure options for Shaping
@@ -447,6 +471,14 @@ class Window(QMainWindow, Ui_MainWindow):
             "objective", self.objective_box, preferred_mapper=True
         )
 
+        self.equalization_settings.add_handler(
+            "constellation", self.eq_constellation_box, preferred_mapper=True
+        )
+
+        self.equalization_settings.add_handler(
+            "channel", self.eq_channel_box, preferred_mapper=True
+        )
+
         self.settings_group.setCurrentIndex(0)
 
     @Slot()
@@ -460,14 +492,20 @@ class Window(QMainWindow, Ui_MainWindow):
     @Slot()
     def handleSettingsChange(self):
         # Reconfigure GUI following a settings change switch Tab if simulation_type is different
-        if self.settings.get("simulation_type") == "shaping" and self.settings_group.currentIndex() == 1:
+        if (
+            self.settings.get("simulation_type") == "shaping"
+            and self.settings_group.currentIndex() == 1
+        ):
             self.settings_group.setCurrentIndex(0)
             # Stop the old simulation and reset the plots
             self.stopSimulation()
             self.resetPlots()
             self.setupTraining()
 
-        elif self.settings.get("simulation_type") == "equalization" and self.settings_group.currentIndex() == 0:
+        elif (
+            self.settings.get("simulation_type") == "equalization"
+            and self.settings_group.currentIndex() == 0
+        ):
             self.settings_group.setCurrentIndex(1)
             # Stop the old simulation and reset the plots
             self.stopSimulation()
@@ -478,6 +516,10 @@ class Window(QMainWindow, Ui_MainWindow):
         if self.settings.get("simulation_type") == "shaping":
             self.worker.reconfigure(
                 {**self.settings.as_dict(), **self.shaping_settings.as_dict()}
+            )
+        elif self.settings.get("simulation_type") == "equalization":
+            self.worker.reconfigure(
+                {**self.settings.as_dict(), **self.equalization_settings.as_dict()}
             )
 
     @Slot()
@@ -499,7 +541,6 @@ class Window(QMainWindow, Ui_MainWindow):
             label.setText(bitstring)
             label.setPos(float(point.real), float(point.imag))
 
-
     def configureSymbolsPlot(self, scatter):
         @Slot()
         def plotSymbols(symbols):
@@ -507,6 +548,7 @@ class Window(QMainWindow, Ui_MainWindow):
                 (symbols.real[:, None], symbols.imag[:, None]), axis=1
             )
             scatter.setData(pos=symbols_array)
+
         return plotSymbols
 
     @Slot()
@@ -516,9 +558,14 @@ class Window(QMainWindow, Ui_MainWindow):
         self.performance.setData(self.epochs, self.bmi)
 
     def setupTraining(self):
-        self.worker = Training(
-            {**self.settings.as_dict(), **self.shaping_settings.as_dict()}
-        )
+        if self.settings.get("simulation_type") == "shaping":
+            settings = {**self.settings.as_dict(), **self.shaping_settings.as_dict()}
+        elif self.settings.get("simulation_type") == "equalization":
+            settings = {
+                **self.settings.as_dict(),
+                **self.equalization_settings.as_dict(),
+            }
+        self.worker = Training(settings)
 
     def runTraining(self):
         self.worker.moveToThread(QCoreApplication.instance().thread())
@@ -589,7 +636,6 @@ class Window(QMainWindow, Ui_MainWindow):
         config.set_many(new_config.as_dict())
         config.save()
 
-
     def stopSimulation(self):
         self.worker_thread.requestInterruption()
         self.simulation_running.emit(False)
@@ -604,8 +650,6 @@ class Window(QMainWindow, Ui_MainWindow):
         self.resetPlots()
         self.runTraining()
         self.simulation_running.emit(True)
-
-
 
     @Slot()
     def runBtn_clicked(self):

@@ -227,8 +227,8 @@ class EqualizerSimulation:
 
         results = {
             "SER": self.SER_valid[:2, self.current_frame].detach().clone().cpu(),
-            "BMI": self.BMI[self.current_frame].detach().clone().cpu()
-
+            "bmi": self.BMI[self.current_frame].detach().clone().cpu(),
+            "rx_signal_posteq": out.detach().clone().cpu(),
         }
         self.current_frame += 1
         return results
@@ -236,35 +236,7 @@ class EqualizerSimulation:
 
 
 
-
-def processing(
-    mod,
-    sps,
-    SNR,
-    nu,
-    M_est,
-    theta_diff,
-    theta,
-    lr_optim,
-    batch_len,
-    N_frame_max,
-    num_frames,
-    flex_step,
-    channel,
-    symb_rate,
-    tau_cd,
-    tau_pmd,
-    phiIQ,
-    N_lrhalf,
-):
-
-
-
-    return SER_valid, Var_est, var, BMI
-
-
 # Adapted functions from shared funcs
-
 
 def init(channel, mod, nu, sps, M_est, SNR):
     if channel == "h1":  # h_1 in Caciularu et al.

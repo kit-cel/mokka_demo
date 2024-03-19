@@ -2,11 +2,13 @@
 
 from interactive_learning_gui import Ui_MainWindow
 from shaping_models import AWGNAutoencoder, ShapingAutoencoder
+from equalization_model import EqualizerSimulation
 from multi_config_dialog import MultiConfigDialog
 
 from pyqtgraph import PlotWidget
 
 import settings
+import time
 
 """Plot Constellation and animate it."""
 from PySide6.QtWidgets import (
@@ -20,7 +22,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QSlider,
     QComboBox,
-    QSizePolicy
+    QSizePolicy,
 )
 
 from PySide6.QtPdf import QPdfDocument
@@ -59,6 +61,52 @@ pg.setConfigOptions(antialias=True)
 vhex = np.vectorize(hex)
 
 
+scatterSizePolicy = QSizePolicy(
+    QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred
+)
+scatterSizePolicy.setHorizontalStretch(0)
+scatterSizePolicy.setVerticalStretch(0)
+scatterSizePolicy.setHeightForWidth(True)
+
+
+def return_true():
+    return True
+
+
+def resizeEvent(self, event):
+    # Create a square base size of 10x10 and scale it to the new size
+    # maintaining aspect ratio.
+    new_size = QSize(10, 10)
+    new_size.scale(event.size(), Qt.AspectRatioMode.KeepAspectRatio)
+    self.resize(new_size)
+
+
+def constructConstellationPlot(parent, name):
+    widget = PlotWidget(parent)
+    widget.heightForWidth = lambda w: w
+    widget.hasHeightForWidth = return_true
+    widget.setObjectName(name)
+    widget.setSizePolicy(scatterSizePolicy)
+    widget.setMinimumSize(QSize(300, 300))
+    widget.setBaseSize(QSize(300, 300))
+    return widget
+
+
+def configureScatterPlot(widget, color, size=5, **kwargs):
+    scatter = pg.ScatterPlotItem(size=size, brush=pg.mkBrush(*color), **kwargs)
+    widget.addItem(scatter)
+    widget.setAspectLocked(1.0)
+    widget.setXRange(-1.5, 1.5)
+    widget.setYRange(-1.5, 1.5)
+    widget.getPlotItem().setLabel("bottom", "Real Part")
+    widget.getPlotItem().setLabel("left", "Imaginary Part")
+    widget.getPlotItem().getAxis("left").setTickSpacing(major=1.0, minor=0.5)
+    widget.getPlotItem().getAxis("left").setGrid(128)
+    widget.getPlotItem().getAxis("bottom").setTickSpacing(major=1.0, minor=0.5)
+    widget.getPlotItem().getAxis("bottom").setGrid(128)
+    return scatter
+
+
 # The idea here is to split the code two-fold
 
 # The GUI code lives in the main thread and updates the plots etc.
@@ -71,8 +119,10 @@ vhex = np.vectorize(hex)
 class Training(QObject):
     finished = Signal()
     progress_result = Signal(int, float)
-    constellation = Signal(object)
-    rx_symbols = Signal(object)
+    symbols1 = Signal(object)
+    symbols2 = Signal(object)
+    channel = Signal(object)
+    channel_est = Signal(object)
     stop = False
     config_update = QMutex()
 
@@ -82,43 +132,57 @@ class Training(QObject):
         # Here we can handle the settings to configure correct Training
         self.max_epoch = None
         self.settings = settings
-        self.model = ShapingAutoencoder(self.settings)
+        if self.settings["simulation_type"] == "shaping":
+            self.model = ShapingAutoencoder(self.settings)
+        elif self.settings["simulation_type"] == "equalization":
+            self.model = EqualizerSimulation(self.settings)
 
     # Configure a Slot to handle changes in the settings object
     @Slot()
     def reconfigure(self, settings):
         with QMutexLocker(self.config_update):
+            if self.settings["simulation_type"] != settings["simulation_type"]:
+                if self.thread() is not None:
+                  self.thread().requestInterruption()
+                time.sleep(0.1)
+                if settings["simulation_type"] == "shaping":
+                    self.model = ShapingAutoencoder(self.settings)
+                elif settings["simulation_type"] == "equalization":
+                    self.model = EqualizerSimulation(self.settings)
             self.settings = settings
             self.model.update_config(self.settings)
         # Simulation type (shaping or adaptive equalization)
 
     @Slot()
-    def killed(self):
-        print("Handled killed signal")
-        self.stop = True
-
     def run(self):
         epoch = 0
         while True:
             if self.max_epoch is not None and epoch == self.max_epoch:
                 return
             if self.thread().isInterruptionRequested():
+                self.thread().quit()
                 return
             epoch += 1
             with QMutexLocker(self.config_update):
                 results = self.model.step()
-            self.progress_result.emit(epoch, results["bmi"])
-            trained_constellation = (
-                self.model.mapper.get_constellation().detach().cpu().numpy()
-            )
-            self.constellation.emit(trained_constellation)
-            self.rx_symbols.emit(results["rx_signal_postcpe"].numpy())
+            if self.settings["simulation_type"] == "shaping":
+                self.progress_result.emit(epoch, results["bmi"])
+                trained_constellation = (
+                    self.model.mapper.get_constellation().detach().cpu().numpy()
+                )
+                self.symbols1.emit(trained_constellation)
+                self.symbols2.emit(results["rx_signal_postcpe"].numpy())
+            elif self.settings["simulation_type"] == "equalization":
+                self.symbols1.emit(results["rx_signal_posteq"].numpy()[0,:])
+                self.symbols2.emit(results["rx_signal_posteq"].numpy()[1,:])
+                self.progress_result.emit(epoch, results["bmi"])
 
 
 class Window(QMainWindow, Ui_MainWindow):
     stop_simulation = Signal()
     simulation_running = Signal(bool)
     labeltexts = None
+    worker_thread: QThread = QThread()
 
     def __init__(self):
         QMainWindow.__init__(self)
@@ -145,6 +209,8 @@ class Window(QMainWindow, Ui_MainWindow):
         self.configureGUI()
         self.addQtGraphItems()
         self.hookGUIEvents()
+        # Configure GUI according to settings
+        self.handleSettingsChange()
 
         self.epochs = []
         self.bmi = []
@@ -153,55 +219,60 @@ class Window(QMainWindow, Ui_MainWindow):
         self.show()
 
     def reconfigureGraphItems(self):
+        # This gets called whenever settings change
         if self.labeltexts is not None:
             for label in self.labeltexts:
-                self.constellation_widget.removeItem(label)
-        self.labeltexts = [
-            pg.TextItem()
-            for _ in range(2 ** self.shaping_settings.get("bits_per_symbol"))
-        ]
-        for label in self.labeltexts:
-            self.constellation_widget.addItem(label)
+                self.scatter_widget1.removeItem(label)
+        if self.settings.get("simulation_type") == "shaping":
+            self.labeltexts = [
+                pg.TextItem()
+                for _ in range(2 ** self.shaping_settings.get("bits_per_symbol"))
+            ]
+            for label in self.labeltexts:
+                self.scatter_widget1.addItem(label)
+
+        # Reconfigure scatter plots
+
+        if self.settings.get("simulation_type") == "shaping":
+            # Configure scatter_plot
+            self.scatter1 = configureScatterPlot(
+                self.scatter_widget1, size=5, color=(0, 150, 130, 255)
+            )
+            # Configure scatter_plot
+            self.scatter2 = configureScatterPlot(
+                self.scatter_widget2, size=2, color=(0, 150, 130, 120), pen=pg.mkPen()
+            )
+        elif self.settings.get("simulation_type") == "equalization":
+            # Configure scatter_plot
+            self.scatter1 = configureScatterPlot(
+                self.scatter_widget1, size=2, color=(0, 150, 130, 120), pen=pg.mkPen()
+            )
+            # Configure scatter_plot
+            self.scatter2 = configureScatterPlot(
+                self.scatter_widget2, size=2, color=(0, 150, 130, 120), pen=pg.mkPen()
+            )
+
 
 
 
     def addQtGraphItems(self):
-        # Configure plots for Shaping
-        def return_true():
-            return True
-        def resizeEvent(event):
-            # Create a square base size of 10x10 and scale it to the new size
-            # maintaining aspect ratio.
-            new_size = QSize(10, 10)
-            new_size.scale(event.size(), Qt.AspectRatioMode.KeepAspectRatio)
-            self.resize(new_size)
+        # Configure plots for Shaping & Eq
 
-        self.constellation_widget = PlotWidget(self.plot_box)
-        self.constellation_widget.heightForWidth = lambda w: w
-        self.constellation_widget.hasHeightForWidth = return_true
-        self.constellation_widget.setObjectName(u"constellation_widget")
-        sizePolicy2 = QSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
-        sizePolicy2.setHorizontalStretch(0)
-        sizePolicy2.setVerticalStretch(0)
-        sizePolicy2.setHeightForWidth(True)
-        self.constellation_widget.setSizePolicy(sizePolicy2)
-        self.constellation_widget.setMinimumSize(QSize(300, 300))
-        self.constellation_widget.setBaseSize(QSize(300, 300))
-        self.gridLayout.addWidget(self.constellation_widget, 0, 0, 1, 1)
+        self.scatter_widget1 = constructConstellationPlot(
+            self.plot_box, "constellation_widget"
+        )
+        self.scatter_widget2 = constructConstellationPlot(
+            self.plot_box, "rx_symbols_widget"
+        )
 
-        self.rx_symbols_widget = PlotWidget(self.plot_box)
-        self.rx_symbols_widget.heightForWidth = lambda w: w
-        self.rx_symbols_widget.hasHeightForWidth = return_true
-        self.rx_symbols_widget.setObjectName(u"rx_symbols_widget")
-        self.rx_symbols_widget.setSizePolicy(sizePolicy2)
-        self.rx_symbols_widget.setMinimumSize(QSize(300, 300))
-        self.rx_symbols_widget.setBaseSize(QSize(300, 300))
-        self.gridLayout.addWidget(self.rx_symbols_widget, 1, 0, 1, 1)
-
+        self.gridLayout.addWidget(self.scatter_widget1, 0, 0, 1, 1)
+        self.gridLayout.addWidget(self.scatter_widget2, 1, 0, 1, 1)
 
         self.plot_widget = PlotWidget(self.plot_box)
-        self.plot_widget.setObjectName(u"plot_widget")
-        sizePolicy1 = QSizePolicy(QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.MinimumExpanding)
+        self.plot_widget.setObjectName("plot_widget")
+        sizePolicy1 = QSizePolicy(
+            QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.MinimumExpanding
+        )
         sizePolicy1.setHorizontalStretch(0)
         sizePolicy1.setVerticalStretch(0)
         sizePolicy1.setHeightForWidth(self.plot_widget.sizePolicy().hasHeightForWidth())
@@ -210,46 +281,11 @@ class Window(QMainWindow, Ui_MainWindow):
 
         self.gridLayout.addWidget(self.plot_widget, 0, 1, 2, 2)
 
-        # Configure scatter_plot
-        self.scatter = pg.ScatterPlotItem(size=10, brush=pg.mkBrush(0, 150, 130, 120))
-        self.constellation_widget.addItem(self.scatter)
+
         self.reconfigureGraphItems()
-        self.constellation_widget.setAspectLocked(1.0)
-        self.constellation_widget.setXRange(-1.5, 1.5)
-        self.constellation_widget.setYRange(-1.5, 1.5)
-        self.constellation_widget.getPlotItem().setLabel("bottom", "Real Part")
-        self.constellation_widget.getPlotItem().setLabel("left", "Imaginary Part")
-        self.constellation_widget.getPlotItem().getAxis("left").setTickSpacing(
-            major=1.0, minor=0.5
+        self.performance = pg.PlotCurveItem(
+            size=10, pen=pg.mkPen((0, 150, 130, 255), width=2)
         )
-        self.constellation_widget.getPlotItem().getAxis("left").setGrid(128)
-        self.constellation_widget.getPlotItem().getAxis("bottom").setTickSpacing(
-            major=1.0, minor=0.5
-        )
-        self.constellation_widget.getPlotItem().getAxis("bottom").setGrid(128)
-        # self.constellation_widget.heightForWidth = lambda self, w: w
-        # self.constellation_widget.sizePolicy().setHeightForWidth(True)
-
-       # Configure scatter_plot
-        self.rx_scatter = pg.ScatterPlotItem(size=2, brush=pg.mkBrush(0, 150, 130, 120), pen=pg.mkPen())
-        self.rx_symbols_widget.addItem(self.rx_scatter)
-        self.reconfigureGraphItems()
-        self.rx_symbols_widget.setAspectLocked(1.0)
-        self.rx_symbols_widget.setXRange(-1.5, 1.5)
-        self.rx_symbols_widget.setYRange(-1.5, 1.5)
-        self.rx_symbols_widget.getPlotItem().setLabel("bottom", "Real Part")
-        self.rx_symbols_widget.getPlotItem().setLabel("left", "Imaginary Part")
-        self.rx_symbols_widget.getPlotItem().getAxis("left").setTickSpacing(
-            major=1.0, minor=0.5
-        )
-        self.rx_symbols_widget.getPlotItem().getAxis("left").setGrid(128)
-        self.rx_symbols_widget.getPlotItem().getAxis("bottom").setTickSpacing(
-            major=1.0, minor=0.5
-        )
-        self.rx_symbols_widget.getPlotItem().getAxis("bottom").setGrid(128)
-
-
-        self.performance = pg.PlotCurveItem(size=10, pen=pg.mkPen((0, 150, 130, 255), width=2))
         # self.performance.setPen(pg.mkPen("k", width=2.5))
         self.plot_widget.addItem(self.performance)
         self.plot_widget.setYRange(0, self.shaping_settings.get("bits_per_symbol"))
@@ -302,19 +338,26 @@ class Window(QMainWindow, Ui_MainWindow):
         shaping_default_metadata = {
             "lr": {
                 "preferred_handler": QDoubleSpinBox,
-                "preferred_handler_fn": lambda handler: (handler.setRange(0,1), handler.setDecimals(5), handler.setSingleStep(0.00001))
+                "preferred_handler_fn": lambda handler: (
+                    handler.setRange(0, 1),
+                    handler.setDecimals(5),
+                    handler.setSingleStep(0.00001),
+                ),
             },
             "LW": {
                 "preferred_handler": QDoubleSpinBox,
-                "preferred_handler_fn": lambda handler: handler.setRange(0,5e6)
+                "preferred_handler_fn": lambda handler: handler.setRange(0, 5e6),
             },
             "symbol_rate": {
                 "preferred_handler": QDoubleSpinBox,
-                "preferred_handler_fn": lambda handler: handler.setRange(10e9, 100e9)
+                "preferred_handler_fn": lambda handler: handler.setRange(10e9, 100e9),
             },
-            "bits_per_symbol":{
+            "bits_per_symbol": {
                 "preferred_handler": QSpinBox,
-                "preferred_handler_fn": lambda handler: (handler.setRange(1,10), handler.setSingleStep(2))
+                "preferred_handler_fn": lambda handler: (
+                    handler.setRange(1, 10),
+                    handler.setSingleStep(2),
+                ),
             },
             "channel": {
                 "preferred_handler": QComboBox,
@@ -367,11 +410,10 @@ class Window(QMainWindow, Ui_MainWindow):
     def configureGUI(self):
         # Configure options for Shaping
         self.bitpersymbol_box.setSingleStep(2)
-        self.bitpersymbol_box.setRange(1,10)
+        self.bitpersymbol_box.setRange(1, 10)
         # Configure options for Equalization
 
         # Configure other GUI options
-
         self.settings_group.setTabText(0, "Shaping")
         self.settings_group.setTabText(1, "Equalization")
 
@@ -418,24 +460,30 @@ class Window(QMainWindow, Ui_MainWindow):
     @Slot()
     def handleSettingsChange(self):
         # Reconfigure GUI following a settings change switch Tab if simulation_type is different
-        if self.settings.get("simulation_type") == "shaping":
+        if self.settings.get("simulation_type") == "shaping" and self.settings_group.currentIndex() == 1:
             self.settings_group.setCurrentIndex(0)
-        elif self.settings.get("simulation_type") == "equalization":
+            # Stop the old simulation and reset the plots
+            self.stopSimulation()
+            self.resetPlots()
+            self.setupTraining()
+
+        elif self.settings.get("simulation_type") == "equalization" and self.settings_group.currentIndex() == 0:
             self.settings_group.setCurrentIndex(1)
+            # Stop the old simulation and reset the plots
+            self.stopSimulation()
+            self.resetPlots()
+            self.setupTraining()
 
         self.reconfigureGraphItems()
         if self.settings.get("simulation_type") == "shaping":
-            self.worker.reconfigure({**self.settings.as_dict(), **self.shaping_settings.as_dict()})
+            self.worker.reconfigure(
+                {**self.settings.as_dict(), **self.shaping_settings.as_dict()}
+            )
 
     @Slot()
     def handleSimulationRunning(self, running):
-        if running:
-            # self.settings_group.setEnabled(False)
-            # self.settings_btn.setEnabled(False)
-            pass
-        else:
-            self.settings_group.setEnabled(True)
-            self.settings_btn.setEnabled(True)
+        # This is called whenever the running state changes
+        pass
 
     @Slot()
     def plotConstellation(self, constellation):
@@ -446,20 +494,20 @@ class Window(QMainWindow, Ui_MainWindow):
         M = 2**m
         labels = [s[2:] for s in vhex(np.arange(M))]
         bitstrings = [str(s) for s in mokka.utils.hex2bits(labels, m)]
-        self.scatter.setData(pos=constellation_array)
+        self.scatter1.setData(pos=constellation_array)
         for bitstring, point, label in zip(bitstrings, constellation, self.labeltexts):
             label.setText(bitstring)
             label.setPos(float(point.real), float(point.imag))
 
 
-
-    @Slot()
-    def plotRxSymbols(self, symbols):
-        symbols_array = np.concatenate(
-            (symbols.real[:,None], symbols.imag[:, None]), axis=1
-        )
-        self.rx_scatter.setData(pos=symbols_array)
-
+    def configureSymbolsPlot(self, scatter):
+        @Slot()
+        def plotSymbols(symbols):
+            symbols_array = np.concatenate(
+                (symbols.real[:, None], symbols.imag[:, None]), axis=1
+            )
+            scatter.setData(pos=symbols_array)
+        return plotSymbols
 
     @Slot()
     def handleProgress(self, progress, result):
@@ -471,6 +519,7 @@ class Window(QMainWindow, Ui_MainWindow):
         self.worker = Training(
             {**self.settings.as_dict(), **self.shaping_settings.as_dict()}
         )
+
     def runTraining(self):
         self.worker.moveToThread(QCoreApplication.instance().thread())
         self.worker_thread = QThread()
@@ -479,13 +528,16 @@ class Window(QMainWindow, Ui_MainWindow):
         self.worker.finished.connect(self.worker_thread.quit)
         self.worker.finished.connect(self.worker.deleteLater)
         self.worker_thread.finished.connect(self.worker_thread.deleteLater)
-        self.worker.constellation.connect(self.plotConstellation)
-        self.worker.rx_symbols.connect(self.plotRxSymbols)
+        if self.settings.get("simulation_type") == "shaping":
+            self.worker.symbols1.connect(self.plotConstellation)
+            self.worker.symbols2.connect(self.configureSymbolsPlot(self.scatter2))
+        elif self.settings.get("simulation_type") == "equalization":
+            self.worker.symbols1.connect(self.configureSymbolsPlot(self.scatter1))
+            self.worker.symbols2.connect(self.configureSymbolsPlot(self.scatter2))
         self.worker.progress_result.connect(self.handleProgress)
-        self.stop_simulation.connect(self.worker.killed)
+        # self.stop_simulation.connect(self.worker.killed)
         self.stop_simulation.connect(self.check_signal)
         self.worker_thread.start()
-
 
     # Debug
     @Slot()
@@ -537,21 +589,30 @@ class Window(QMainWindow, Ui_MainWindow):
         config.set_many(new_config.as_dict())
         config.save()
 
-    @Slot()
-    def runBtn_clicked(self):
-        if self.run_btn.isFlat():
-            self.worker_thread.requestInterruption()
-            self.simulation_running.emit(False)
-            self.worker.moveToThread(QCoreApplication.instance().thread())
-            self.worker_thread.quit()
-            self.run_btn.setFlat(False)
-            self.run_btn.setText("Run")
-            return
+
+    def stopSimulation(self):
+        self.worker_thread.requestInterruption()
+        self.simulation_running.emit(False)
+        self.worker.moveToThread(QCoreApplication.instance().thread())
+        self.worker_thread.quit()
+        self.run_btn.setFlat(False)
+        self.run_btn.setText("Run")
+
+    def startSimulation(self):
         self.run_btn.setFlat(True)
         self.run_btn.setText("Stop && Reset")
         self.resetPlots()
         self.runTraining()
         self.simulation_running.emit(True)
+
+
+
+    @Slot()
+    def runBtn_clicked(self):
+        if self.run_btn.isFlat():
+            self.stopSimulation()
+            return
+        self.startSimulation()
 
     @Slot()
     def resetBtn_clicked(self):
@@ -560,7 +621,8 @@ class Window(QMainWindow, Ui_MainWindow):
         self.setupTraining()
 
     def resetPlots(self):
-        self.constellation_widget.clear()
+        self.scatter_widget1.clear()
+        self.scatter_widget2.clear()
         self.plot_widget.clear()
         self.addQtGraphItems()
         self.epochs = []

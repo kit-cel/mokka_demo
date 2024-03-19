@@ -17,22 +17,224 @@ import matplotlib.pyplot as plt
 
 from mokka.equalizers.adaptive.torch import VAE_LE_DP
 
-
 class EqualizerSimulation:
     config: dict | None = None
+    current_frame: int = 0
 
-    def __init__(self):
+    def __init__(self, config):
         self.update_config(config)
-        pass
 
     def update_config(self, config):
-        pass
-
+        self.mod = "64-QAM"
+        self.sps = 2
+        self.SNR = 24
+        self.nu = 0.0270955
+        self.M = 25
+        self.theta_diff = 0
+        self.theta = 0
+        self.lr_optim = 0.003
+        self.batch_len = 200
+        self.N_frame_max = 10000
+        self.num_frames = 100
+        self.flex_step = 10
+        self.channel = "h0"
+        self.symb_rate = 100000000000.0
+        self.tau_cd = -2.6e-23
+        self.tau_pmd = 5e-12
+        self.phiIQ = torch.tensor([0 + 0j, 0 + 0j])
+        self.N_lrhalf = 20
 
     def step(self):
         # This should process frame by frame and output the result so it can
         # be displayed in the GUI
-        pass
+        if self.current_frame == self.num_frames:
+            return
+        if self.current_frame == 0:
+            (
+                self.h_est,
+                self.h_channel,
+                self.P,
+                self.amp_levels,
+                self.amps,
+                self.bit_arr,
+                self.pol,
+                self.nu_sc,
+                self.var,
+                self.pow_mean,
+                self.kurtosis,
+                self.H_P,
+            ) = init(self.channel, self.mod, self.nu, self.sps, self.M, self.SNR)
+            if self.mod == "64-QAM":
+                mapper = mokka.mapping.torch.QAMConstellationMapper(6)
+                constell = mapper.get_constellation().squeeze()
+            self.num_lev = self.amp_levels.shape[0]
+            self.P_tensor = torch.tensor(self.P, dtype=torch.float32)
+
+            # # initialize net (butterfly FIR)
+
+            # # add h_est as parameter
+            # optimizer.add_param_group({"params": h_est})
+
+            self.demapper = mokka.mapping.torch.ClassicalDemapper(  # IQDemapper(
+                noise_sigma=torch.tensor(
+                    0.1
+                ),  # torch.sqrt(var[0]), #torch.tensor(0.3, requires_grad=True),  #var[0],  # 0.05
+                # amp_levels=amp_levels,
+                constellation=self.amp_levels,
+                bitwise=False,
+                optimize=False,
+                p_symbols=self.P_tensor,
+            )
+
+            self.eqVAE = VAE_LE_DP(
+                self.M,
+                self.M,
+                self.demapper,
+                self.sps,
+                block_size=self.batch_len,
+                lr=self.lr_optim,
+                requires_q=True,
+                IQ_separate=True,
+            )
+            self.eqVAE.reset()
+
+            self.SER_valid = torch.empty(4, self.num_frames, dtype=torch.float32)
+            self.BMI = torch.zeros(self.num_frames, dtype=torch.float32)
+            self.Var_est = torch.empty(self.pol, self.num_frames, dtype=torch.float32)
+
+            self.minibatch = torch.empty(self.pol, 2, self.batch_len * self.sps, dtype=torch.float32)
+
+            self.m_max = self.N_frame_max // self.batch_len
+            self.N_frame = self.m_max * self.batch_len
+            self.N_cut = 10  # number of symbols cut off to prevent edge effects of convolution
+
+            (
+                self.rx_tensor_full,
+                self.data_tensor_full,
+                self.sigma_n,
+                self.temp_labels_full,
+            ) = generate_data_shaping(
+                self.num_frames * self.N_frame,
+                self.amps,
+                self.SNR,
+                self.h_channel,
+                self.P,
+                self.pol,
+                self.symb_rate,
+                self.sps,
+                self.tau_cd,
+                self.tau_pmd,
+                self.phiIQ,
+                self.theta,
+            )
+            self.N_lrhalf = 10
+        if self.current_frame % self.N_lrhalf == 0 and self.current_frame != 0:  # learning rate scheduler
+            self.lr_optim *= 0.5
+            self.eqVAE.update_lr = self.lr_optim
+
+        with torch.set_grad_enabled(True):
+            rx_tensor, data_tensor, temp_labels = (
+                self.rx_tensor_full[
+                    :, :, self.sps * self.current_frame * self.N_frame : self.sps * (self.current_frame + 1) * self.N_frame
+                ],
+                self.data_tensor_full[:, :, self.current_frame * self.N_frame : (self.current_frame + 1) * self.N_frame],
+                self.temp_labels_full[:, self.current_frame * self.N_frame : (self.current_frame + 1) * self.N_frame],
+            )
+            bit_labels = self.bit_arr[temp_labels, :]
+            self.theta += self.theta_diff  # update theta per frame
+
+            out_train = torch.empty(
+                self.pol,
+                2 * self.num_lev,
+                self.N_frame,
+                dtype=torch.float32,
+                requires_grad=False,
+            )
+            out_const = torch.empty(
+                self.pol, 2, self.N_frame - self.batch_len, dtype=torch.float32, requires_grad=False
+            )
+            var_est = torch.empty(self.pol, self.m_max, dtype=torch.float32, requires_grad=False)
+
+            # print(eq.butterfly_backward.taps)
+            out, out_q = self.eqVAE(torch.complex(rx_tensor[:, 0, :], rx_tensor[:, 1, :]))
+
+        out_const[:, 0, :], out_const[:, 1, :] = (
+            out.real.detach().clone(),
+            out.imag.detach().clone(),
+        )
+
+        out_train = out_q.permute(0, 2, 1)
+
+        if self.current_frame == 0:
+            self.out_full = out_const
+        else:
+            self.out_full = torch.cat((self.out_full, out_const), dim=2)
+
+        temp_data_tensor = data_tensor[:, :, :-self.batch_len]
+
+        shift, r = find_shift(
+            out_train, temp_data_tensor, 21, self.amp_levels, self.pol
+        )  # find correlation within 21 symbols
+
+        out_train[0, :, :], out_train[1, :, :] = out_train[0, :, :].roll(
+            int(-shift[0]), -1
+        ), out_train[1, :, :].roll(
+            int(-shift[1]), -1
+        )  # compensate time shift (in multiple symb.)
+        out_train = out_train.roll(r, 0)  # compensate pol. shift
+
+        temp_out_train = out_train
+
+        self.SER_valid[2:, self.current_frame], ind_IQ, ind_phase = SER_IQflip(
+            temp_out_train[:, :, 11 : -11 - torch.max(torch.abs(shift))],
+            temp_data_tensor[:, :, 11 : -11 - torch.max(torch.abs(shift))],
+        )
+
+        temp_bit_labels = bit_labels[:, :-self.batch_len, :]
+        log_app = get_logAPPs(
+            temp_out_train[:, :, 11 : -11 - torch.max(torch.abs(shift))],
+            indIQ=ind_IQ,
+            ind_phase=ind_phase,
+        )
+        self.BMI[self.current_frame] = bmi(
+            log_app,
+            temp_bit_labels[:, 11 : -11 - torch.max(torch.abs(shift)), :].reshape(
+                2, -1
+            ),
+            self.H_P,
+        )
+
+        shift, r = find_shift_symb_full(
+            out_const, temp_data_tensor, 21
+        )  # find correlation within 21 symbols
+        out_const[0, :, :], out_const[1, :, :] = out_const[0, :, :].roll(
+            int(-shift[0]), -1
+        ), out_const[1, :, :].roll(
+            int(-shift[1]), -1
+        )  # compensate time shift (in multiple symb.)
+        out_const = out_const.roll(r, 0)  # compensate pol. shift
+        temp_out_const = out_const
+
+        self.SER_valid[:2, self.current_frame] = SER_constell_shaping(
+            temp_out_const[:, :, 11 : -11 - torch.max(torch.abs(shift))]
+            .detach()
+            .clone(),
+            temp_data_tensor[:, :, 11 : -11 - torch.max(torch.abs(shift))],
+            self.amp_levels,
+            self.nu_sc,
+            self.var,
+        )
+
+        results = {
+            "SER": self.SER_valid[:2, self.current_frame].detach().clone().cpu(),
+            "BMI": self.BMI[self.current_frame].detach().clone().cpu()
+
+        }
+        self.current_frame += 1
+        return results
+
+
+
 
 
 def processing(
@@ -55,182 +257,8 @@ def processing(
     phiIQ,
     N_lrhalf,
 ):
-    (
-        h_est,
-        h_channel,
-        P,
-        amp_levels,
-        amps,
-        bit_arr,
-        pol,
-        nu_sc,
-        var,
-        pow_mean,
-        kurtosis,
-        H_P,
-    ) = init(channel, mod, nu, sps, M_est, SNR)
-    if mod == "64-QAM":
-        mapper = mokka.mapping.torch.QAMConstellationMapper(6)
-        constell = mapper.get_constellation().squeeze()
-    num_lev = amp_levels.shape[0]
-    P_tensor = torch.tensor(P, dtype=torch.float32)
 
-    # # initialize net (butterfly FIR)
 
-    # # add h_est as parameter
-    # optimizer.add_param_group({"params": h_est})
-
-    demapper = mokka.mapping.torch.ClassicalDemapper(  # IQDemapper(
-        noise_sigma=torch.tensor(
-            0.1
-        ),  # torch.sqrt(var[0]), #torch.tensor(0.3, requires_grad=True),  #var[0],  # 0.05
-        # amp_levels=amp_levels,
-        constellation=amp_levels,
-        bitwise=False,
-        optimize=False,
-        p_symbols=P_tensor,
-    )
-
-    eqVAE = VAE_LE_DP(
-        M_est,
-        M_est,
-        demapper,
-        sps,
-        block_size=batch_len,
-        lr=lr_optim,
-        requires_q=True,
-        IQ_separate=True,
-    )
-    eqVAE.reset()
-
-    SER_valid = torch.empty(4, num_frames, dtype=torch.float32)
-    BMI = torch.zeros(num_frames, dtype=torch.float32)
-    Var_est = torch.empty(pol, num_frames, dtype=torch.float32)
-
-    minibatch = torch.empty(pol, 2, batch_len * sps, dtype=torch.float32)
-
-    m_max = N_frame_max // batch_len
-    N_frame = m_max * batch_len
-    N_cut = 10  # number of symbols cut off to prevent edge effects of convolution
-
-    (
-        rx_tensor_full,
-        data_tensor_full,
-        sigma_n,
-        temp_labels_full,
-    ) = generate_data_shaping(
-        num_frames * N_frame,
-        amps,
-        SNR,
-        h_channel,
-        P,
-        pol,
-        symb_rate,
-        sps,
-        tau_cd,
-        tau_pmd,
-        phiIQ,
-        theta,
-    )
-    N_lrhalf = 10
-
-    for frame in range(num_frames):
-        if frame % N_lrhalf == 0 and frame != 0:  # learning rate scheduler
-            lr_optim *= 0.5
-            eqVAE.update_lr = lr_optim
-
-        with torch.set_grad_enabled(True):
-            rx_tensor, data_tensor, temp_labels = (
-                rx_tensor_full[
-                    :, :, sps * frame * N_frame : sps * (frame + 1) * N_frame
-                ],
-                data_tensor_full[:, :, frame * N_frame : (frame + 1) * N_frame],
-                temp_labels_full[:, frame * N_frame : (frame + 1) * N_frame],
-            )
-            bit_labels = bit_arr[temp_labels, :]
-            theta += theta_diff  # update theta per frame
-
-            out_train = torch.empty(
-                pol,
-                2 * num_lev,
-                N_frame,
-                dtype=torch.float32,
-                requires_grad=False,
-            )
-            out_const = torch.empty(
-                pol, 2, N_frame - batch_len, dtype=torch.float32, requires_grad=False
-            )
-            var_est = torch.empty(pol, m_max, dtype=torch.float32, requires_grad=False)
-
-            # print(eq.butterfly_backward.taps)
-            out, out_q = eqVAE(torch.complex(rx_tensor[:, 0, :], rx_tensor[:, 1, :]))
-
-        out_const[:, 0, :], out_const[:, 1, :] = (
-            out.real.detach().clone(),
-            out.imag.detach().clone(),
-        )
-
-        out_train = out_q.permute(0, 2, 1)
-
-        if frame == 0:
-            out_full = out_const
-        else:
-            out_full = torch.cat((out_full, out_const), dim=2)
-
-        temp_data_tensor = data_tensor[:, :, :-batch_len]
-
-        shift, r = find_shift(
-            out_train, temp_data_tensor, 21, amp_levels, pol
-        )  # find correlation within 21 symbols
-
-        out_train[0, :, :], out_train[1, :, :] = out_train[0, :, :].roll(
-            int(-shift[0]), -1
-        ), out_train[1, :, :].roll(
-            int(-shift[1]), -1
-        )  # compensate time shift (in multiple symb.)
-        out_train = out_train.roll(r, 0)  # compensate pol. shift
-
-        temp_out_train = out_train
-
-        SER_valid[2:, frame], ind_IQ, ind_phase = SER_IQflip(
-            temp_out_train[:, :, 11 : -11 - torch.max(torch.abs(shift))],
-            temp_data_tensor[:, :, 11 : -11 - torch.max(torch.abs(shift))],
-        )
-
-        temp_bit_labels = bit_labels[:, :-batch_len, :]
-        log_app = get_logAPPs(
-            temp_out_train[:, :, 11 : -11 - torch.max(torch.abs(shift))],
-            indIQ=ind_IQ,
-            ind_phase=ind_phase,
-        )
-        BMI[frame] = bmi(
-            log_app,
-            temp_bit_labels[:, 11 : -11 - torch.max(torch.abs(shift)), :].reshape(
-                2, -1
-            ),
-            H_P,
-        )
-
-        shift, r = find_shift_symb_full(
-            out_const, temp_data_tensor, 21
-        )  # find correlation within 21 symbols
-        out_const[0, :, :], out_const[1, :, :] = out_const[0, :, :].roll(
-            int(-shift[0]), -1
-        ), out_const[1, :, :].roll(
-            int(-shift[1]), -1
-        )  # compensate time shift (in multiple symb.)
-        out_const = out_const.roll(r, 0)  # compensate pol. shift
-        temp_out_const = out_const
-
-        SER_valid[:2, frame] = SER_constell_shaping(
-            temp_out_const[:, :, 11 : -11 - torch.max(torch.abs(shift))]
-            .detach()
-            .clone(),
-            temp_data_tensor[:, :, 11 : -11 - torch.max(torch.abs(shift))],
-            amp_levels,
-            nu_sc,
-            var,
-        )
 
     return SER_valid, Var_est, var, BMI
 
@@ -859,7 +887,7 @@ def bmi(log_app, label_bits, H_P, a=0.0, b=1.0, tol=1e-5):
     :param label_bits: The actually sent bits.
     :returns BMI (scalar value)
     """
-    hefu_cl =hefu_class(log_app.device)
+    hefu_cl = hefu_class(log_app.device)
     # Apply bit metric decoder to log APPs of symbols to get bit-wise LLRs.
     assert log_app.shape[-2] == label_bits.shape[-1] / hefu_cl.m
     assert (
@@ -1017,9 +1045,11 @@ def dec_on_bound(rx, tx_int, d_vec0, d_vec1):
     )  # SER = numb. of errors/ num of symbols
     return SER
 
+
 """
 Constellation class.
 """
+
 
 class hefu_class:
     """
@@ -1032,36 +1062,237 @@ class hefu_class:
         :param mapping: t.Tensor which contains the constellation symbols, sorted according
             to their binary representation (MSB left).
         """
-        qam64_mapping_1 = t.tensor(np.array([-7,-7,-7,-7,-7,-7,-7,-7,-5,-5,-5,-5,-5,-5,-5,-5,
-                                    -3,-3,-3,-3,-3,-3,-3,-3,-1,-1,-1,-1,-1,-1,-1,-1,
-                                    1,1,1,1,1,1,1,1,3,3,3,3,3,3,3,3,5,5,5,5,5,5,5,5,7,7,7,7,7,7,7,7]) \
-                                    + 1j*np.array([-7,-5,-3,-1,1,3,5,7,-7,-5,-3,-1,1,3,5,7,-7,-5,-3,
-                                    -1,1,3,5,7,-7,-5,-3,-1,1,3,5,7,-7,-5,-3,-1,1,3,5,7,-7,-5,-3,-1,1
-                                    ,3,5,7,-7,-5,-3,-1,1,3,5,7,-7,-5,-3,-1,1,3,5,7]), dtype=t.cfloat)
+        qam64_mapping_1 = t.tensor(
+            np.array(
+                [
+                    -7,
+                    -7,
+                    -7,
+                    -7,
+                    -7,
+                    -7,
+                    -7,
+                    -7,
+                    -5,
+                    -5,
+                    -5,
+                    -5,
+                    -5,
+                    -5,
+                    -5,
+                    -5,
+                    -3,
+                    -3,
+                    -3,
+                    -3,
+                    -3,
+                    -3,
+                    -3,
+                    -3,
+                    -1,
+                    -1,
+                    -1,
+                    -1,
+                    -1,
+                    -1,
+                    -1,
+                    -1,
+                    1,
+                    1,
+                    1,
+                    1,
+                    1,
+                    1,
+                    1,
+                    1,
+                    3,
+                    3,
+                    3,
+                    3,
+                    3,
+                    3,
+                    3,
+                    3,
+                    5,
+                    5,
+                    5,
+                    5,
+                    5,
+                    5,
+                    5,
+                    5,
+                    7,
+                    7,
+                    7,
+                    7,
+                    7,
+                    7,
+                    7,
+                    7,
+                ]
+            )
+            + 1j
+            * np.array(
+                [
+                    -7,
+                    -5,
+                    -3,
+                    -1,
+                    1,
+                    3,
+                    5,
+                    7,
+                    -7,
+                    -5,
+                    -3,
+                    -1,
+                    1,
+                    3,
+                    5,
+                    7,
+                    -7,
+                    -5,
+                    -3,
+                    -1,
+                    1,
+                    3,
+                    5,
+                    7,
+                    -7,
+                    -5,
+                    -3,
+                    -1,
+                    1,
+                    3,
+                    5,
+                    7,
+                    -7,
+                    -5,
+                    -3,
+                    -1,
+                    1,
+                    3,
+                    5,
+                    7,
+                    -7,
+                    -5,
+                    -3,
+                    -1,
+                    1,
+                    3,
+                    5,
+                    7,
+                    -7,
+                    -5,
+                    -3,
+                    -1,
+                    1,
+                    3,
+                    5,
+                    7,
+                    -7,
+                    -5,
+                    -3,
+                    -1,
+                    1,
+                    3,
+                    5,
+                    7,
+                ]
+            ),
+            dtype=t.cfloat,
+        )
 
-        Gray_map = t.tensor([0, 1, 3,2, 6,7,5,4,8,9,11,10,14,15,13,12,24,25,27,26,30,31,29,28,16,17,19,18,22,23,21,20,48,49,51,50,54,55,53,52,56,57,59,58,62,63,61,60,40,41,43,42,46,47,45,44,32,33,35,34,38,39,37,36], dtype=t.long)
+        Gray_map = t.tensor(
+            [
+                0,
+                1,
+                3,
+                2,
+                6,
+                7,
+                5,
+                4,
+                8,
+                9,
+                11,
+                10,
+                14,
+                15,
+                13,
+                12,
+                24,
+                25,
+                27,
+                26,
+                30,
+                31,
+                29,
+                28,
+                16,
+                17,
+                19,
+                18,
+                22,
+                23,
+                21,
+                20,
+                48,
+                49,
+                51,
+                50,
+                54,
+                55,
+                53,
+                52,
+                56,
+                57,
+                59,
+                58,
+                62,
+                63,
+                61,
+                60,
+                40,
+                41,
+                43,
+                42,
+                46,
+                47,
+                45,
+                44,
+                32,
+                33,
+                35,
+                34,
+                38,
+                39,
+                37,
+                36,
+            ],
+            dtype=t.long,
+        )
         qam64_mapping = qam64_mapping_1[Gray_map]
-        bit_arr = t.tensor(np.unpackbits(Gray_map.to(t.uint8)).reshape(64,8))
-        bit_arr = bit_arr[:,8-6:]
-        O = bit_arr.nonzero() #A[bit_arr==0]
-        Z = (1-bit_arr).nonzero()
-        S = t.zeros(6,2,32)
+        bit_arr = t.tensor(np.unpackbits(Gray_map.to(t.uint8)).reshape(64, 8))
+        bit_arr = bit_arr[:, 8 - 6 :]
+        O = bit_arr.nonzero()  # A[bit_arr==0]
+        Z = (1 - bit_arr).nonzero()
+        S = t.zeros(6, 2, 32)
         for k in range(6):
-            S[k,1,:] = O[O[:,1]==k,0]       # ones
-            S[k,0,:] = Z[Z[:,1]==k,0]       # zeros
+            S[k, 1, :] = O[O[:, 1] == k, 0]  # ones
+            S[k, 0, :] = Z[Z[:, 1] == k, 0]  # zeros
 
-        assert len(qam64_mapping.shape) == 1 # mapping should be a 1-dim tensor
+        assert len(qam64_mapping.shape) == 1  # mapping should be a 1-dim tensor
         self.mapping = qam64_mapping.to(device)
 
-        self.M = t.numel(self.mapping) # Number of constellation symbols.
+        self.M = t.numel(self.mapping)  # Number of constellation symbols.
         self.m = np.log2(self.M).astype(int)
-        assert self.m == np.log2(self.M) # Assert that log2(M) is integer
+        assert self.m == np.log2(self.M)  # Assert that log2(M) is integer
         self.mask = 2 ** t.arange(self.m - 1, -1, -1).to(device)
 
         self.sub_consts = S.to(dtype=t.int32, device=device)
-        #self.sub_consts = t.stack([t.stack([t.arange(self.M).reshape(2**(i+1),-1)[::2].flatten(), t.arange(self.M).reshape(2**(i+1),-1)[1::2].flatten()]) for i in range(self.m)]).to(device)
+        # self.sub_consts = t.stack([t.stack([t.arange(self.M).reshape(2**(i+1),-1)[::2].flatten(), t.arange(self.M).reshape(2**(i+1),-1)[1::2].flatten()]) for i in range(self.m)]).to(device)
         self.device = device
-
 
     def map(self, bits):
         """
@@ -1073,9 +1304,11 @@ class hefu_class:
         """
         # Assert that the length of the bit sequence is a multiple of m.
         in_shape = bits.shape
-        assert in_shape[-1]/self.m == in_shape[-1]//self.m
+        assert in_shape[-1] / self.m == in_shape[-1] // self.m
         # reshape and convert bits to decimal and use decimal number as index for mapping
-        return self.mapping[t.sum(self.mask * bits.reshape(in_shape[:-1] + (-1, self.m)), -1)]
+        return self.mapping[
+            t.sum(self.mask * bits.reshape(in_shape[:-1] + (-1, self.m)), -1)
+        ]
 
     def bit2symbol_idx(self, bits):
         """
@@ -1088,7 +1321,7 @@ class hefu_class:
         """
         # Assert that the length of the bit sequence is a multiple of m.
         in_shape = bits.shape
-        assert in_shape[-1]/self.m == in_shape[-1]//self.m
+        assert in_shape[-1] / self.m == in_shape[-1] // self.m
         # reshape and convert bits to decimal and use decimal number as index for mapping
         return t.sum(self.mask * bits.reshape(in_shape[:-1] + (-1, self.m)), -1)
 
@@ -1101,7 +1334,13 @@ class hefu_class:
         # Assert that the length of the bit sequence is a multiple of m.
         in_shape = symbol_idxs.shape
         # reshape and convert symbol to bits and use decimal number as index for mapping
-        return symbol_idxs.unsqueeze(-1).bitwise_and(self.mask).ne(0).view(symbol_idxs.shape[:-1]+(-1,)).float()
+        return (
+            symbol_idxs.unsqueeze(-1)
+            .bitwise_and(self.mask)
+            .ne(0)
+            .view(symbol_idxs.shape[:-1] + (-1,))
+            .float()
+        )
 
     def nearest_neighbor(self, rx_syms):
         """
@@ -1110,7 +1349,7 @@ class hefu_class:
         The output are the idxs of the constellation symbols.
         """
         # Compute distances to all possible symbols.
-        distance = t.abs(self.mapping - rx_syms[...,None])
+        distance = t.abs(self.mapping - rx_syms[..., None])
         hard_dec_idx = t.argmin(distance, dim=-1)
         return hard_dec_idx
 
@@ -1120,22 +1359,25 @@ class hefu_class:
         probability for each of the M possible constellation symbols.
         The bit metric decoder calculates the bit LLRs for each of the m bits for each symbol.
         """
-        assert len(symbol_apps.shape) >= 2 # second last: symbol sequence, last: M log APPs
+        assert (
+            len(symbol_apps.shape) >= 2
+        )  # second last: symbol sequence, last: M log APPs
         assert symbol_apps.shape[-1] == self.M
 
         # For each of the m bits, repartition the M APPs into two subsets regarding the respective bit.
         # The output vector has shape (..., m, 2, M/2).
-        subset_probs = t.index_select(symbol_apps,-1, self.sub_consts.flatten()).view(symbol_apps.shape[:-1] + self.sub_consts.shape)
+        subset_probs = t.index_select(symbol_apps, -1, self.sub_consts.flatten()).view(
+            symbol_apps.shape[:-1] + self.sub_consts.shape
+        )
         # Sum up probabilities of all subsets. (exp to go from log to lin domain and log to go back to log domain)
         bitwise_apps = self.jacobian_sum(subset_probs, dim=-1)
         # LLR
-        LLR = (bitwise_apps[...,0] - bitwise_apps[...,1]).flatten(start_dim = -2)
+        LLR = (bitwise_apps[..., 0] - bitwise_apps[..., 1]).flatten(start_dim=-2)
         assert symbol_apps.shape[:-2] == LLR.shape[:-1]
-        assert symbol_apps.shape[-2]*self.m == LLR.shape[-1]
+        assert symbol_apps.shape[-2] * self.m == LLR.shape[-1]
         assert not t.isinf(LLR).any()
 
         return LLR
-
 
     def jacobian_sum(self, msg, dim):
         """
@@ -1146,15 +1388,14 @@ class hefu_class:
             return msg.flatten(start_dim=-2)
         else:
             if dim == -1:
-                tmp = self.pairwise_jacobian_sum(msg[...,0], msg[...,1])
+                tmp = self.pairwise_jacobian_sum(msg[..., 0], msg[..., 1])
                 for i in range(2, msg.shape[-1]):
-                    tmp = self.pairwise_jacobian_sum(tmp, msg[...,i])
+                    tmp = self.pairwise_jacobian_sum(tmp, msg[..., i])
             elif dim == -2:
-                tmp = self.pairwise_jacobian_sum(msg[...,0,:], msg[...,1,:])
+                tmp = self.pairwise_jacobian_sum(msg[..., 0, :], msg[..., 1, :])
                 for i in range(2, msg.shape[-1]):
-                    tmp = self.pairwise_jacobian_sum(tmp, msg[...,i,:])
+                    tmp = self.pairwise_jacobian_sum(tmp, msg[..., i, :])
             return tmp
-
 
     def pairwise_jacobian_sum(self, msg1, msg2):
         """

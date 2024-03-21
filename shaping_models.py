@@ -42,6 +42,7 @@ class AWGNAutoencoder:
         loss = self.m - bmi
         loss.backward()
         self.optim.step()
+
         self.optim.zero_grad()
         return bmi
 
@@ -86,7 +87,6 @@ class ShapingAutoencoder:
             self.mapper = mokka.mapping.torch.ConstellationMapper(
                 config["bits_per_symbol"], qam_init=True
             )
-            self.optim = torch.optim.Adam(self.mapper.parameters(), lr=1e-3)
 
         # Configure channel
         if (
@@ -102,10 +102,10 @@ class ShapingAutoencoder:
             if config["channel"] == settings.ShapingChannel.AWGN:
                 self.channel_chain.append(mokka.channels.torch.ComplexAWGN(N0))
             elif config["channel"] == settings.ShapingChannel.Wiener:
-                sigma_phi = utils.sigma_phi(
-                    config["LW"], config["symbol_rate"]
+                sigma_phi = utils.sigma_phi(config["LW"], config["symbol_rate"])
+                pn_channel = mokka.channels.torch.PhasenoiseWiener(
+                    start_phase_init=0, start_phase_width=0
                 )
-                pn_channel = mokka.channels.torch.PhasenoiseWiener(start_phase_init=0, start_phase_width=0)
                 self.channel_chain.append(lambda syms: pn_channel(syms, N0, sigma_phi))
 
         # Configure cpe
@@ -138,14 +138,13 @@ class ShapingAutoencoder:
             or self.config["demapper"] != config["demapper"]
             or self.config["bits_per_symbol"] != config["bits_per_symbol"]
         ):
-
             if config["demapper"] == settings.Demapper.Neural:
                 self.demapper = mokka.mapping.torch.ConstellationDemapper(
                     m=config["bits_per_symbol"]
                 )
-                self.optim.add_param_group(
-                    {"params": self.demapper.parameters(), "lr": config["lr"]}
-                )
+                # self.optim.add_param_group(
+                #     {"params": self.demapper.parameters(), "lr": config["lr"]}
+                # )
             elif config["demapper"] == settings.Demapper.Gaussian:
                 N0 = torch.as_tensor(utils.N0(config["SNR"]))
                 self.demapper = mokka.mapping.torch.ClassicalDemapper(
@@ -160,15 +159,15 @@ class ShapingAutoencoder:
         ):
             pass
 
-
         self.config = config
+        self.optim = torch.optim.Adam(
+            (*self.mapper.parameters(), *self.demapper.parameters()), lr=1e-3
+        )
 
     def channel(self, tx_signal):
         for ch in self.channel_chain:
             tx_signal = ch(tx_signal)
         return tx_signal
-
-
 
     def step(self):
         results = {}

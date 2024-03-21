@@ -87,8 +87,8 @@ def constructConstellationPlot(parent, name):
     widget.hasHeightForWidth = return_true
     widget.setObjectName(name)
     widget.setSizePolicy(scatterSizePolicy)
-    widget.setMinimumSize(QSize(300, 300))
-    widget.setBaseSize(QSize(300, 300))
+    widget.setMinimumSize(QSize(200, 200))
+    widget.setBaseSize(QSize(200, 200))
     return widget
 
 
@@ -146,11 +146,14 @@ class Training(QObject):
                     self.thread().requestInterruption()
                 time.sleep(0.1)
                 if settings["simulation_type"] == "shaping":
-                    self.model = ShapingAutoencoder(self.settings)
+                    self.model = ShapingAutoencoder(settings)
                 elif settings["simulation_type"] == "equalization":
-                    self.model = EqualizerSimulation(self.settings)
+                    self.model = EqualizerSimulation(settings)
             self.settings = settings
             self.model.update_config(self.settings)
+            if self.settings["simulation_type"] == "equalization":
+                # Reset simulation since parameters changed
+                self.model.current_frame = 0
         # Simulation type (shaping or adaptive equalization)
 
     @Slot()
@@ -223,6 +226,9 @@ class Window(QMainWindow, Ui_MainWindow):
         if self.labeltexts is not None:
             for label in self.labeltexts:
                 self.scatter_widget1.removeItem(label)
+
+        # Reconfigure scatter plots
+
         if self.settings.get("simulation_type") == "shaping":
             self.labeltexts = [
                 pg.TextItem()
@@ -231,26 +237,6 @@ class Window(QMainWindow, Ui_MainWindow):
             for label in self.labeltexts:
                 self.scatter_widget1.addItem(label)
 
-        # Reconfigure scatter plots
-
-        if self.settings.get("simulation_type") == "shaping":
-            # Configure scatter_plot
-            self.scatter1 = configureScatterPlot(
-                self.scatter_widget1, size=5, color=(0, 150, 130, 255)
-            )
-            # Configure scatter_plot
-            self.scatter2 = configureScatterPlot(
-                self.scatter_widget2, size=2, color=(0, 150, 130, 120), pen=pg.mkPen()
-            )
-        elif self.settings.get("simulation_type") == "equalization":
-            # Configure scatter_plot
-            self.scatter1 = configureScatterPlot(
-                self.scatter_widget1, size=2, color=(0, 150, 130, 120), pen=pg.mkPen()
-            )
-            # Configure scatter_plot
-            self.scatter2 = configureScatterPlot(
-                self.scatter_widget2, size=2, color=(0, 150, 130, 120), pen=pg.mkPen()
-            )
 
     def addQtGraphItems(self):
         # Configure plots for Shaping & Eq
@@ -277,6 +263,14 @@ class Window(QMainWindow, Ui_MainWindow):
         self.plot_widget.setMinimumSize(QSize(700, 500))
 
         self.gridLayout.addWidget(self.plot_widget, 0, 1, 2, 2)
+        # Configure scatter_plot
+        self.scatter1 = configureScatterPlot(
+            self.scatter_widget1, size=5, color=(0, 150, 130, 255)
+        )
+        # Configure scatter_plot
+        self.scatter2 = configureScatterPlot(
+            self.scatter_widget2, size=2, color=(0, 150, 130, 120), pen=pg.mkPen()
+        )
 
         self.reconfigureGraphItems()
         self.performance = pg.PlotCurveItem(
@@ -290,7 +284,8 @@ class Window(QMainWindow, Ui_MainWindow):
         self.plot_widget.getPlotItem().setLabel("bottom", "Epoch")
         self.plot_widget.getPlotItem().getAxis("left").setGrid(128)
 
-        self.plot_widget.getPlotItem().enableAutoRange(x=True)
+        self.plot_widget.getPlotItem().enableAutoRange(x=True, y=True)
+        self.plot_widget.getPlotItem().setLimits(yMin=0,minYRange=self.shaping_settings.get("bits_per_symbol"))
         self.plot_widget.getPlotItem().setAutoPan(x=True)
         self.plot_widget.getPlotItem().setAutoVisible(y=True)
 
@@ -536,7 +531,8 @@ class Window(QMainWindow, Ui_MainWindow):
         M = 2**m
         labels = [s[2:] for s in vhex(np.arange(M))]
         bitstrings = [str(s) for s in mokka.utils.hex2bits(labels, m)]
-        self.scatter1.setData(pos=constellation_array)
+        print(constellation_array.shape)
+        self.scatter1.setData(pos=constellation_array, size=5, color=(0, 150, 130, 255) )
         for bitstring, point, label in zip(bitstrings, constellation, self.labeltexts):
             label.setText(bitstring)
             label.setPos(float(point.real), float(point.imag))
@@ -547,7 +543,8 @@ class Window(QMainWindow, Ui_MainWindow):
             symbols_array = np.concatenate(
                 (symbols.real[:, None], symbols.imag[:, None]), axis=1
             )
-            scatter.setData(pos=symbols_array)
+            scatter.clear()
+            scatter.setData(pos=symbols_array, size=2, pen=pg.mkPen())
 
         return plotSymbols
 

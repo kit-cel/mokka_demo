@@ -169,7 +169,11 @@ class Training(QObject):
             with QMutexLocker(self.config_update):
                 results = self.model.step()
             if self.settings["simulation_type"] == "shaping":
-                self.progress_result.emit(epoch, results["bmi"])
+                if self.settings["objective"] == settings.ShapingObjective.BMI:
+                    self.progress_result.emit(epoch, results["bmi"])
+                elif self.settings["objective"] == settings.ShapingObjective.MI:
+                    self.progress_result.emit(epoch, results["mi"])
+
                 trained_constellation = (
                     self.model.mapper.get_constellation().detach().cpu().numpy()
                 )

@@ -79,6 +79,9 @@ class ShapingAutoencoder:
         if self.config is None:
             self.config = {}
 
+        # We do a lot of checking here if a value that is used for this particular element
+        # has changed. A bit cumbersome, probably there is a a smarter way to do that
+
         # Configure mapper
         if (
             "bits_per_symbol" not in self.config
@@ -137,10 +140,12 @@ class ShapingAutoencoder:
             "demapper" not in self.config
             or self.config["demapper"] != config["demapper"]
             or self.config["bits_per_symbol"] != config["bits_per_symbol"]
+            or self.config["objective"] != config["objective"]
         ):
+            bitwise = config["objective"] == settings.ShapingObjective.BMI
             if config["demapper"] == settings.Demapper.Neural:
                 self.demapper = mokka.mapping.torch.ConstellationDemapper(
-                    m=config["bits_per_symbol"]
+                    m=config["bits_per_symbol"], bitwise=bitwise, with_logit=bitwise
                 )
                 # self.optim.add_param_group(
                 #     {"params": self.demapper.parameters(), "lr": config["lr"]}
@@ -150,6 +155,7 @@ class ShapingAutoencoder:
                 self.demapper = mokka.mapping.torch.ClassicalDemapper(
                     noise_sigma=torch.sqrt(N0),
                     constellation=self.mapper.get_constellation(),
+                    bitwise=bitwise,
                 )
 
         # Configure Objective
@@ -176,7 +182,13 @@ class ShapingAutoencoder:
         bits = utils.generators.torch.generate_bits(
             (self.config["symbols_per_step"], self.config["bits_per_symbol"])
         )
-        symbols = self.mapper(bits).flatten()
+        if self.config["objective"] == settings.ShapingObjective.MI:
+            # We compute the one_hot vectors already outside the mapper
+            one_hot = mokka.utils.bitops.torch.bits_to_onehot(bits)
+            symbols = self.mapper(one_hot, one_hot=True).flatten()
+        else:
+            symbols = self.mapper(bits).flatten()
+
         tx_signal = symbols
         rx_signal = self.channel(tx_signal.clone())
         results["tx_signal"] = tx_signal.detach().clone().cpu()
@@ -188,15 +200,28 @@ class ShapingAutoencoder:
         results["rx_signal_postcpe"] = rx_signal.detach().clone().cpu()
 
         # Change between MI & GMI objective
-        llrs = self.demapper(rx_signal.flatten()[:, None])
-        bmi = mokka.inft.torch.BMI(
-            self.config["bits_per_symbol"],
-            self.config["symbols_per_step"],
-            bits,
-            llrs,
-        )
-        results["bmi"] = bmi.detach().clone().cpu()
-        loss = self.config["bits_per_symbol"] - bmi
+        if self.config["objective"] == settings.ShapingObjective.BMI:
+            llrs = self.demapper(rx_signal.flatten()[:, None])
+            bmi = mokka.inft.torch.BMI(
+                self.config["bits_per_symbol"],
+                self.config["symbols_per_step"],
+                bits,
+                llrs,
+            )
+            results["bmi"] = bmi.detach().clone().cpu()
+            loss = self.config["bits_per_symbol"] - bmi
+        elif self.config["objective"] == settings.ShapingObjective.MI:
+            q_values = self.demapper(rx_signal.flatten()[:, None])
+            mi = mokka.inft.torch.MI(
+                2 ** self.config["bits_per_symbol"],
+                1 / (2 ** self.config["bits_per_symbol"]),
+                self.config["symbols_per_step"],
+                mokka.utils.bitops.torch.onehot_to_idx(one_hot),
+                q_values,
+            )
+            results["mi"] = mi.detach().clone().cpu()
+            loss = self.config["bits_per_symbol"] - mi
+
         loss.backward()
         results["loss"] = loss.detach().clone().cpu()
         self.optim.step()

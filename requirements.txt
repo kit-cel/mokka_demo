@@ -1,4 +1,4 @@
-mokka
+mokka[torch] @ git+https://github.com/kit-cel/mokka@feature/adaptive_equalizers
 pyside6
 pandas
-pyqtconfig
+pyqtconfig @ git+https://github.com/noc0lour/pyqtconfig@feature/preferred_map

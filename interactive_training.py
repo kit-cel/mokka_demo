@@ -118,7 +118,7 @@ def configureScatterPlot(widget, color, size=5, **kwargs):
 
 class Training(QObject):
     finished = Signal()
-    progress_result = Signal(int, float)
+    progress_result = Signal(int, object)
     symbols1 = Signal(object)
     symbols2 = Signal(object)
     channel = Signal(object)
@@ -170,9 +170,9 @@ class Training(QObject):
                 results = self.model.step()
             if self.settings["simulation_type"] == "shaping":
                 if self.settings["objective"] == settings.ShapingObjective.BMI:
-                    self.progress_result.emit(epoch, results["bmi"])
+                    self.progress_result.emit(epoch, results)
                 elif self.settings["objective"] == settings.ShapingObjective.MI:
-                    self.progress_result.emit(epoch, results["mi"])
+                    self.progress_result.emit(epoch, results)
 
                 trained_constellation = (
                     self.model.mapper.get_constellation().detach().cpu().numpy()
@@ -182,7 +182,7 @@ class Training(QObject):
             elif self.settings["simulation_type"] == "equalization":
                 self.symbols1.emit(results["rx_signal_posteq"].numpy()[0, :])
                 self.symbols2.emit(results["rx_signal_posteq"].numpy()[1, :])
-                self.progress_result.emit(epoch, results["bmi"])
+                self.progress_result.emit(epoch, results)
 
 
 class Window(QMainWindow, Ui_MainWindow):
@@ -232,6 +232,8 @@ class Window(QMainWindow, Ui_MainWindow):
                 self.scatter_widget1.removeItem(label)
 
         # Reconfigure scatter plots
+        if not self.shaping_settings.get("show_labels"):
+            return
 
         if self.settings.get("simulation_type") == "shaping":
             self.labeltexts = [
@@ -240,7 +242,6 @@ class Window(QMainWindow, Ui_MainWindow):
             ]
             for label in self.labeltexts:
                 self.scatter_widget1.addItem(label)
-
 
     def addQtGraphItems(self):
         # Configure plots for Shaping & Eq
@@ -280,16 +281,24 @@ class Window(QMainWindow, Ui_MainWindow):
         self.performance = pg.PlotCurveItem(
             size=10, pen=pg.mkPen((0, 150, 130, 255), width=2)
         )
+        self.entropy = pg.InfiniteLine(angle=0, pos=0, pen=pg.mkPen(color="red"))
         # self.performance.setPen(pg.mkPen("k", width=2.5))
         self.plot_widget.addItem(self.performance)
-        self.plot_widget.setYRange(0, self.shaping_settings.get("bits_per_symbol"))
+        self.plot_widget.addItem(self.entropy)
+        if self.settings.get("simulation_type") == "shaping":
+            self.plot_widget.setYRange(0, self.shaping_settings.get("bits_per_symbol"))
+        else:
+            # Only 64-QAM for Equalization right now
+            self.plot_widget.setYRange(0, 6)
         self.plot_widget.setXRange(0, 1000)
         self.plot_widget.getPlotItem().setLabel("left", "BMI (bit/symbol)")
         self.plot_widget.getPlotItem().setLabel("bottom", "Epoch")
         self.plot_widget.getPlotItem().getAxis("left").setGrid(128)
 
-        self.plot_widget.getPlotItem().enableAutoRange(x=True, y=True)
-        self.plot_widget.getPlotItem().setLimits(yMin=0,minYRange=self.shaping_settings.get("bits_per_symbol"))
+        self.plot_widget.getPlotItem().enableAutoRange(x=True)
+        self.plot_widget.getPlotItem().setLimits(
+            yMin=0, minYRange=self.shaping_settings.get("bits_per_symbol")
+        )
         self.plot_widget.getPlotItem().setAutoPan(x=True)
         self.plot_widget.getPlotItem().setAutoVisible(y=True)
 
@@ -329,6 +338,7 @@ class Window(QMainWindow, Ui_MainWindow):
             "SNR": 12.0,
             "LW": 100e3,
             "symbol_rate": 32e9,
+            "show_labels": True,
         }
         shaping_default_metadata = {
             "lr": {
@@ -390,8 +400,8 @@ class Window(QMainWindow, Ui_MainWindow):
                 "preferred_handler": QComboBox,
                 "preferred_map_dict": {
                     "Geometric": settings.ShapingType.Geometric,
-                    "Probabilistic": settings.ShapingType.Probabilistic,
-                    "Joint Geometric & Probabilistic": settings.ShapingType.Joint,
+                    # "Probabilistic": settings.ShapingType.Probabilistic,
+                    # "Joint Geometric & Probabilistic": settings.ShapingType.Joint,
                 },
             },
         }
@@ -403,11 +413,28 @@ class Window(QMainWindow, Ui_MainWindow):
             "channel": "h0",
             "constellation": "64-QAM",
             "num_frames": 100,
+            "nu": 0.0270955,
+            "batch_len": 200,
+            "tau_cd": -2.6,
+            "tau_pmd": 5.0,
+            "learning_rate": 0.003,
+            "var_from_estimate": False,
         }
         equalization_default_metadata = {
+            "learning_rate": {
+                "preferred_handler": QDoubleSpinBox,
+                "preferred_handler_fn": lambda handler: (
+                    handler.setRange(0, 1),
+                    handler.setDecimals(5),
+                    handler.setSingleStep(0.001),
+                ),
+            },
             "num_frames": {
                 "preferred_handler": QSpinBox,
-                "preferred_handler_fn": lambda handler: (handler.setRange(1, 1000), handler.setSingleStep(10))
+                "preferred_handler_fn": lambda handler: (
+                    handler.setRange(1, 1000),
+                    handler.setSingleStep(10),
+                ),
             },
             "constellation": {
                 "preferred_handler": QComboBox,
@@ -420,8 +447,25 @@ class Window(QMainWindow, Ui_MainWindow):
             "channel": {
                 "preferred_handler": QComboBox,
                 "preferred_map_dict": {
-                    "h0": "h0",
+                    "only optical impairments": "h0",
+                    "h1 (Caciularu)": "h1",
+                    "h2 (Caciularu)": "h2",
                 },
+            },
+            "nu": {
+                "preferred_handler": QDoubleSpinBox,
+                "preferred_handler_fn": lambda handler: (
+                    handler.setRange(0, 1),
+                    handler.setDecimals(5),
+                    handler.setSingleStep(0.00001),
+                ),
+            },
+            "batch_len": {
+                "preferred_handler": QSpinBox,
+                "preferred_handler_fn": lambda handler: (
+                    handler.setRange(1, 1000),
+                    handler.setSingleStep(100),
+                ),
             },
         }
         self.equalization_settings = ConfigManager(
@@ -471,8 +515,12 @@ class Window(QMainWindow, Ui_MainWindow):
         )
 
         self.equalization_settings.add_handler(
-            "constellation", self.eq_constellation_box, preferred_mapper=True
+            "learning_rate", self.eq_learning_rate_box
         )
+
+        self.equalization_settings.add_handler("batch_len", self.eq_block_length_box)
+
+        self.equalization_settings.add_handler("nu", self.eq_shaping_parameter_box)
 
         self.equalization_settings.add_handler(
             "channel", self.eq_channel_box, preferred_mapper=True
@@ -520,6 +568,14 @@ class Window(QMainWindow, Ui_MainWindow):
             self.worker.reconfigure(
                 {**self.settings.as_dict(), **self.equalization_settings.as_dict()}
             )
+        # Handle MI/BMI
+        if (
+            self.settings.get("simulation_type") == "shaping"
+            and self.shaping_settings.get("objective") == settings.ShapingObjective.MI
+        ):
+            self.plot_widget.getPlotItem().setLabel("left", "MI (bit/symbol)")
+        else:
+            self.plot_widget.getPlotItem().setLabel("left", "BMI (bit/symbol)")
 
     @Slot()
     def handleSimulationRunning(self, running):
@@ -535,8 +591,13 @@ class Window(QMainWindow, Ui_MainWindow):
         M = 2**m
         labels = [s[2:] for s in vhex(np.arange(M))]
         bitstrings = [str(s) for s in mokka.utils.hex2bits(labels, m)]
-        print(constellation_array.shape)
-        self.scatter1.setData(pos=constellation_array, size=5, color=(0, 150, 130, 255) )
+        self.scatter1.setData(
+            pos=constellation_array,
+            size=5,
+            color=(0, 150, 130, 255),
+        )
+        if not self.shaping_settings.get("show_labels"):
+            return
         for bitstring, point, label in zip(bitstrings, constellation, self.labeltexts):
             label.setText(bitstring)
             label.setPos(float(point.real), float(point.imag))
@@ -555,8 +616,15 @@ class Window(QMainWindow, Ui_MainWindow):
     @Slot()
     def handleProgress(self, progress, result):
         self.epochs.append(progress)
-        self.bmi.append(result)
+        if self.settings.get("simulation_type") == "shaping" and self.shaping_settings.get("objective") == settings.ShapingObjective.MI:
+            self.bmi.append(result["mi"])
+        else:
+            self.bmi.append(result["bmi"])
         self.performance.setData(self.epochs, self.bmi)
+        if self.settings.get("simulation_type") == "equalization":
+            self.entropy.setPos(result["entropy"])
+        else:
+            self.entropy.setPos(self.shaping_settings.get("bits_per_symbol"))
 
     def setupTraining(self):
         if self.settings.get("simulation_type") == "shaping":
@@ -577,9 +645,13 @@ class Window(QMainWindow, Ui_MainWindow):
         self.worker.finished.connect(self.worker.deleteLater)
         self.worker_thread.finished.connect(self.worker_thread.deleteLater)
         if self.settings.get("simulation_type") == "shaping":
+            self.scatter_widget1.getPlotItem().setTitle("Transmit Constellation")
+            self.scatter_widget2.getPlotItem().setTitle("Received Symbols")
             self.worker.symbols1.connect(self.plotConstellation)
             self.worker.symbols2.connect(self.configureSymbolsPlot(self.scatter2))
         elif self.settings.get("simulation_type") == "equalization":
+            self.scatter_widget1.getPlotItem().setTitle("Received Symbols X-Pol")
+            self.scatter_widget2.getPlotItem().setTitle("Received Symbols Y-Pol")
             self.worker.symbols1.connect(self.configureSymbolsPlot(self.scatter1))
             self.worker.symbols2.connect(self.configureSymbolsPlot(self.scatter2))
         self.worker.progress_result.connect(self.handleProgress)

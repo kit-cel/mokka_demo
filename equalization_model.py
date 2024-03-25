@@ -25,24 +25,27 @@ class EqualizerSimulation:
         self.update_config(config)
 
     def update_config(self, config):
+        tau_cd = config["tau_cd"] * 1e-23
+        tau_pmd = config["tau_pmd"] * 1e-12
         self.mod = config["constellation"]
         self.sps = 2
         self.SNR = config["SNR"]
-        self.nu = 0.0270955
+        self.nu = config["nu"]# 0.0270955
         self.M = config["eq_len"]
         self.theta_diff = 0
         self.theta = 0
-        self.lr_optim = 0.003
-        self.batch_len = 200
+        self.lr_optim = config["learning_rate"]
+        self.batch_len = config["batch_len"]
         self.N_frame_max = config["symbols_per_step"]
         self.num_frames = config["num_frames"]
         self.flex_step = 10
         self.channel = "h0"
         self.symb_rate = 100000000000.0
-        self.tau_cd = -2.6e-23
-        self.tau_pmd = 5e-12
+        self.tau_cd = tau_cd #-2.6e-23
+        self.tau_pmd = tau_pmd
         self.phiIQ = torch.tensor([0 + 0j, 0 + 0j])
         self.N_lrhalf = 20
+        self.var_from_estimate = config["var_from_estimate"]
 
     def step(self):
         # This should process frame by frame and output the result so it can
@@ -66,7 +69,12 @@ class EqualizerSimulation:
             ) = init(self.channel, self.mod, self.nu, self.sps, self.M, self.SNR)
             if self.mod == "64-QAM":
                 mapper = mokka.mapping.torch.QAMConstellationMapper(6)
-                constell = mapper.get_constellation().squeeze()
+            elif self.mod == "16-QAM":
+                mapper = mokka.mapping.torch.QAMConstellationMapper(4)
+            elif self.mod == "QPSK":
+                mapper = mokka.mapping.torch.QAMConstellationMapper(2)
+
+            constell = mapper.get_constellation().squeeze()
             self.num_lev = self.amp_levels.shape[0]
             self.P_tensor = torch.tensor(self.P, dtype=torch.float32)
 
@@ -95,6 +103,7 @@ class EqualizerSimulation:
                 lr=self.lr_optim,
                 requires_q=True,
                 IQ_separate=True,
+                var_from_estimate=self.var_from_estimate
             )
             self.eqVAE.reset()
 
@@ -229,6 +238,7 @@ class EqualizerSimulation:
             "SER": self.SER_valid[:2, self.current_frame].detach().clone().cpu(),
             "bmi": self.BMI[self.current_frame].detach().clone().cpu(),
             "rx_signal_posteq": out.detach().clone().cpu(),
+            "entropy": self.H_P
         }
         self.current_frame += 1
         return results
@@ -408,7 +418,7 @@ def init(channel, mod, nu, sps, M_est, SNR):
         ),
     }
 
-    assert mod == "64-QAM"
+    # assert mod == "64-QAM"
     Gray_map = np.array(
         [
             0,

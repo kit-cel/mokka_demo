@@ -6,7 +6,7 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>810</width>
+    <width>881</width>
     <height>740</height>
    </rect>
   </property>
@@ -29,7 +29,7 @@
          <property name="currentIndex">
           <number>1</number>
          </property>
-         <widget class="QWidget" name="settings_group_shaping" native="true">
+         <widget class="QWidget" name="settings_group_shaping">
           <property name="accessibleName">
            <string/>
           </property>
@@ -153,17 +153,21 @@
               <item>
                <widget class="QLabel" name="label_5">
                 <property name="text">
-                 <string>Constellation</string>
+                 <string>Shaping Parameter</string>
                 </property>
                </widget>
               </item>
               <item>
-               <widget class="QComboBox" name="eq_constellation_box"/>
+               <widget class="QDoubleSpinBox" name="eq_shaping_parameter_box">
+                <property name="decimals">
+                 <number>7</number>
+                </property>
+               </widget>
               </item>
              </layout>
             </widget>
            </item>
-           <item alignment="Qt::AlignLeft">
+           <item>
             <widget class="QFrame" name="frame_8">
              <property name="sizePolicy">
               <sizepolicy hsizetype="Fixed" vsizetype="Preferred">
@@ -187,6 +191,67 @@
               </item>
               <item>
                <widget class="QComboBox" name="eq_channel_box"/>
+              </item>
+             </layout>
+            </widget>
+           </item>
+           <item>
+            <widget class="QFrame" name="frame_9">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Fixed" vsizetype="Preferred">
+               <horstretch>0</horstretch>
+               <verstretch>0</verstretch>
+              </sizepolicy>
+             </property>
+             <property name="frameShape">
+              <enum>QFrame::StyledPanel</enum>
+             </property>
+             <property name="frameShadow">
+              <enum>QFrame::Raised</enum>
+             </property>
+             <layout class="QVBoxLayout" name="verticalLayout_9">
+              <item alignment="Qt::AlignHCenter">
+               <widget class="QLabel" name="label_7">
+                <property name="text">
+                 <string>Learning Rate</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QDoubleSpinBox" name="eq_learning_rate_box">
+                <property name="decimals">
+                 <number>5</number>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </widget>
+           </item>
+           <item>
+            <widget class="QFrame" name="frame_10">
+             <property name="frameShape">
+              <enum>QFrame::StyledPanel</enum>
+             </property>
+             <property name="frameShadow">
+              <enum>QFrame::Raised</enum>
+             </property>
+             <layout class="QVBoxLayout" name="verticalLayout_10">
+              <item>
+               <widget class="QLabel" name="label_8">
+                <property name="text">
+                 <string>Block Length</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QSpinBox" name="eq_block_length_box">
+                <property name="minimum">
+                 <number>10</number>
+                </property>
+                <property name="maximum">
+                 <number>1000</number>
+                </property>
+               </widget>
               </item>
              </layout>
             </widget>
@@ -618,7 +683,7 @@
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>810</width>
+     <width>881</width>
      <height>24</height>
     </rect>
    </property>

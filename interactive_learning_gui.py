@@ -16,17 +16,17 @@ from PySide6.QtGui import (QAction, QBrush, QColor, QConicalGradient,
     QIcon, QImage, QKeySequence, QLinearGradient,
     QPainter, QPalette, QPixmap, QRadialGradient,
     QTransform)
-from PySide6.QtWidgets import (QApplication, QComboBox, QFrame, QGridLayout,
-    QGroupBox, QHBoxLayout, QLabel, QMainWindow,
-    QMenu, QMenuBar, QPushButton, QSizePolicy,
-    QSpinBox, QStatusBar, QTabWidget, QVBoxLayout,
-    QWidget)
+from PySide6.QtWidgets import (QApplication, QComboBox, QDoubleSpinBox, QFrame,
+    QGridLayout, QGroupBox, QHBoxLayout, QLabel,
+    QMainWindow, QMenu, QMenuBar, QPushButton,
+    QSizePolicy, QSpinBox, QStatusBar, QTabWidget,
+    QVBoxLayout, QWidget)
 
 class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
         if not MainWindow.objectName():
             MainWindow.setObjectName(u"MainWindow")
-        MainWindow.resize(810, 740)
+        MainWindow.resize(881, 740)
         self.actionChannel_Settings = QAction(MainWindow)
         self.actionChannel_Settings.setObjectName(u"actionChannel_Settings")
         self.centralwidget = QWidget(MainWindow)
@@ -142,10 +142,11 @@ class Ui_MainWindow(object):
 
         self.verticalLayout_7.addWidget(self.label_5)
 
-        self.eq_constellation_box = QComboBox(self.frame_7)
-        self.eq_constellation_box.setObjectName(u"eq_constellation_box")
+        self.eq_shaping_parameter_box = QDoubleSpinBox(self.frame_7)
+        self.eq_shaping_parameter_box.setObjectName(u"eq_shaping_parameter_box")
+        self.eq_shaping_parameter_box.setDecimals(7)
 
-        self.verticalLayout_7.addWidget(self.eq_constellation_box)
+        self.verticalLayout_7.addWidget(self.eq_shaping_parameter_box)
 
 
         self.horizontalLayout_6.addWidget(self.frame_7)
@@ -169,7 +170,50 @@ class Ui_MainWindow(object):
         self.verticalLayout_8.addWidget(self.eq_channel_box)
 
 
-        self.horizontalLayout_6.addWidget(self.frame_8, 0, Qt.AlignLeft)
+        self.horizontalLayout_6.addWidget(self.frame_8)
+
+        self.frame_9 = QFrame(self.settings_group_equalization)
+        self.frame_9.setObjectName(u"frame_9")
+        sizePolicy.setHeightForWidth(self.frame_9.sizePolicy().hasHeightForWidth())
+        self.frame_9.setSizePolicy(sizePolicy)
+        self.frame_9.setFrameShape(QFrame.StyledPanel)
+        self.frame_9.setFrameShadow(QFrame.Raised)
+        self.verticalLayout_9 = QVBoxLayout(self.frame_9)
+        self.verticalLayout_9.setObjectName(u"verticalLayout_9")
+        self.label_7 = QLabel(self.frame_9)
+        self.label_7.setObjectName(u"label_7")
+
+        self.verticalLayout_9.addWidget(self.label_7, 0, Qt.AlignHCenter)
+
+        self.eq_learning_rate_box = QDoubleSpinBox(self.frame_9)
+        self.eq_learning_rate_box.setObjectName(u"eq_learning_rate_box")
+        self.eq_learning_rate_box.setDecimals(5)
+
+        self.verticalLayout_9.addWidget(self.eq_learning_rate_box)
+
+
+        self.horizontalLayout_6.addWidget(self.frame_9)
+
+        self.frame_10 = QFrame(self.settings_group_equalization)
+        self.frame_10.setObjectName(u"frame_10")
+        self.frame_10.setFrameShape(QFrame.StyledPanel)
+        self.frame_10.setFrameShadow(QFrame.Raised)
+        self.verticalLayout_10 = QVBoxLayout(self.frame_10)
+        self.verticalLayout_10.setObjectName(u"verticalLayout_10")
+        self.label_8 = QLabel(self.frame_10)
+        self.label_8.setObjectName(u"label_8")
+
+        self.verticalLayout_10.addWidget(self.label_8)
+
+        self.eq_block_length_box = QSpinBox(self.frame_10)
+        self.eq_block_length_box.setObjectName(u"eq_block_length_box")
+        self.eq_block_length_box.setMinimum(10)
+        self.eq_block_length_box.setMaximum(1000)
+
+        self.verticalLayout_10.addWidget(self.eq_block_length_box)
+
+
+        self.horizontalLayout_6.addWidget(self.frame_10)
 
         self.settings_group.addTab(self.settings_group_equalization, "")
 
@@ -325,7 +369,7 @@ class Ui_MainWindow(object):
         MainWindow.setCentralWidget(self.centralwidget)
         self.menubar = QMenuBar(MainWindow)
         self.menubar.setObjectName(u"menubar")
-        self.menubar.setGeometry(QRect(0, 0, 810, 24))
+        self.menubar.setGeometry(QRect(0, 0, 881, 24))
         self.menuJoint_Geometric_and_Probabilistic_Shaping_Demo = QMenu(self.menubar)
         self.menuJoint_Geometric_and_Probabilistic_Shaping_Demo.setObjectName(u"menuJoint_Geometric_and_Probabilistic_Shaping_Demo")
         MainWindow.setMenuBar(self.menubar)
@@ -355,8 +399,10 @@ class Ui_MainWindow(object):
         self.label_3.setText(QCoreApplication.translate("MainWindow", u"Shaping Type", None))
         self.label_4.setText(QCoreApplication.translate("MainWindow", u"Objective function", None))
         self.settings_group.setTabText(self.settings_group.indexOf(self.settings_group_shaping), "")
-        self.label_5.setText(QCoreApplication.translate("MainWindow", u"Constellation", None))
+        self.label_5.setText(QCoreApplication.translate("MainWindow", u"Shaping Parameter", None))
         self.label_6.setText(QCoreApplication.translate("MainWindow", u"Channel Type", None))
+        self.label_7.setText(QCoreApplication.translate("MainWindow", u"Learning Rate", None))
+        self.label_8.setText(QCoreApplication.translate("MainWindow", u"Block Length", None))
         self.settings_group.setTabText(self.settings_group.indexOf(self.settings_group_equalization), QCoreApplication.translate("MainWindow", u"Page", None))
         self.run_group.setTitle(QCoreApplication.translate("MainWindow", u"Run Settings", None))
         self.settings_btn.setText(QCoreApplication.translate("MainWindow", u"Settings", None))

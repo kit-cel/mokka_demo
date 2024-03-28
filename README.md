@@ -1,3 +1,6 @@
+<img width="1193" alt="image" src="https://github.com/kit-cel/mokka_demo/assets/4438327/a8ed6a10-fc45-47a1-9159-cce3ae24c8f0">
+
+
 # MOKka Demo - Constellation Shaping \& Equalization
 
 This repository contains the full source code for the demonstration presented at

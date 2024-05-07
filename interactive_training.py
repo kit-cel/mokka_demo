@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+import torch
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+torch.autograd.set_detect_anomaly(True)
+torch.set_default_dtype(torch.float32)
+torch.set_default_device(device)
 
 from interactive_learning_gui import Ui_MainWindow
 from shaping_models import AWGNAutoencoder, ShapingAutoencoder
@@ -9,6 +15,7 @@ from pyqtgraph import PlotWidget
 
 import settings
 import time
+
 
 """Plot Constellation and animate it."""
 from PySide6.QtWidgets import (
@@ -119,7 +126,7 @@ def configureScatterPlot(widget, color, size=5, **kwargs):
 class Training(QObject):
     finished = Signal()
     progress_result = Signal(int, object)
-    symbols1 = Signal(object)
+    symbols1 = Signal(object, object)
     symbols2 = Signal(object)
     channel = Signal(object)
     channel_est = Signal(object)
@@ -177,7 +184,9 @@ class Training(QObject):
                 trained_constellation = (
                     self.model.mapper.get_constellation().detach().cpu().numpy()
                 )
-                self.symbols1.emit(trained_constellation)
+                probabilities = self.model.mapper.p_symbols.detach().cpu().numpy()
+
+                self.symbols1.emit(trained_constellation, probabilities)
                 self.symbols2.emit(results["rx_signal_postcpe"].numpy())
             elif self.settings["simulation_type"] == "equalization":
                 self.symbols1.emit(results["rx_signal_posteq"].numpy()[0, :])
@@ -203,6 +212,9 @@ class Window(QMainWindow, Ui_MainWindow):
 
         # setting geometry
         self.setGeometry(100, 100, 1200, 500)
+
+        # Disable switching of simulations in GUI (for shaping demo)
+        self.settings_group.tabBar().setEnabled(False)
 
         # icon
         icon = QIcon("skin.png")
@@ -294,10 +306,11 @@ class Window(QMainWindow, Ui_MainWindow):
         self.plot_widget.getPlotItem().setLabel("left", "BMI (bit/symbol)")
         self.plot_widget.getPlotItem().setLabel("bottom", "Epoch")
         self.plot_widget.getPlotItem().getAxis("left").setGrid(128)
+        self.plot_widget.getPlotItem().getAxis("bottom").setGrid(128)
 
         self.plot_widget.getPlotItem().enableAutoRange(x=True)
         self.plot_widget.getPlotItem().setLimits(
-            yMin=0, minYRange=self.shaping_settings.get("bits_per_symbol")
+            xMin=0, yMin=0, minYRange=self.shaping_settings.get("bits_per_symbol")
         )
         self.plot_widget.getPlotItem().setAutoPan(x=True)
         self.plot_widget.getPlotItem().setAutoVisible(y=True)
@@ -315,7 +328,7 @@ class Window(QMainWindow, Ui_MainWindow):
                 "preferred_handler": QComboBox,
                 "preferred_map_dict": {
                     "shaping": "shaping",
-                    "equalization": "equalization",
+                    # "equalization": "equalization",
                 },
             },
         }
@@ -339,6 +352,7 @@ class Window(QMainWindow, Ui_MainWindow):
             "LW": 100e3,
             "symbol_rate": 32e9,
             "show_labels": True,
+            "qam_init": True,
         }
         shaping_default_metadata = {
             "lr": {
@@ -369,7 +383,7 @@ class Window(QMainWindow, Ui_MainWindow):
                 "preferred_map_dict": {
                     "AWGN": settings.ShapingChannel.AWGN,
                     "Wiener Phase Noise": settings.ShapingChannel.Wiener,
-                    # "Optical Channel": settings.ShapingChannel.Optical,
+                    "Optical Channel": settings.ShapingChannel.Optical,
                 },
             },
             "demapper": {
@@ -400,8 +414,8 @@ class Window(QMainWindow, Ui_MainWindow):
                 "preferred_handler": QComboBox,
                 "preferred_map_dict": {
                     "Geometric": settings.ShapingType.Geometric,
-                    # "Probabilistic": settings.ShapingType.Probabilistic,
-                    # "Joint Geometric & Probabilistic": settings.ShapingType.Joint,
+                    "Probabilistic": settings.ShapingType.Probabilistic,
+                    "Joint Geometric & Probabilistic": settings.ShapingType.Joint,
                 },
             },
         }
@@ -583,7 +597,7 @@ class Window(QMainWindow, Ui_MainWindow):
         pass
 
     @Slot()
-    def plotConstellation(self, constellation):
+    def plotConstellation(self, constellation, probabilities=None):
         constellation_array = np.concatenate(
             (constellation.real[:, None], constellation.imag[:, None]), axis=1
         )
@@ -591,9 +605,13 @@ class Window(QMainWindow, Ui_MainWindow):
         M = 2**m
         labels = [s[2:] for s in vhex(np.arange(M))]
         bitstrings = [str(s) for s in mokka.utils.hex2bits(labels, m)]
+        if probabilities is None:
+            scatter_size = 5
+        else:
+            scatter_size = (2**m) * 5 * probabilities
         self.scatter1.setData(
             pos=constellation_array,
-            size=5,
+            size=scatter_size,
             color=(0, 150, 130, 255),
         )
         if not self.shaping_settings.get("show_labels"):
@@ -616,10 +634,11 @@ class Window(QMainWindow, Ui_MainWindow):
     @Slot()
     def handleProgress(self, progress, result):
         self.epochs.append(progress)
-        if self.settings.get("simulation_type") == "shaping" and self.shaping_settings.get("objective") == settings.ShapingObjective.MI:
-            self.bmi.append(result["mi"])
-        else:
-            self.bmi.append(result["bmi"])
+        if self.settings.get("simulation_type") == "shaping":
+            if "mi" in result:
+                self.bmi.append(result["mi"])
+            elif "bmi" in result:
+                self.bmi.append(result["bmi"])
         self.performance.setData(self.epochs, self.bmi)
         if self.settings.get("simulation_type") == "equalization":
             self.entropy.setPos(result["entropy"])

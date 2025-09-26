@@ -189,7 +189,7 @@ class Training(QObject):
                 self.symbols1.emit(trained_constellation, probabilities)
                 self.symbols2.emit(results["rx_signal_postcpe"].numpy())
             elif self.settings["simulation_type"] == "equalization":
-                self.symbols1.emit(results["rx_signal_posteq"].numpy()[0, :])
+                self.symbols1.emit(results["rx_signal_posteq"].numpy()[0, :], None)
                 self.symbols2.emit(results["rx_signal_posteq"].numpy()[1, :])
                 self.progress_result.emit(epoch, results)
 

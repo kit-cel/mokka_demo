@@ -3,7 +3,7 @@ from enum import IntEnum
 class ShapingType(IntEnum):
     Geometric =  0
     Probabilistic = 1
-    Joint = 1
+    Joint = 2
 
 class ShapingChannel(IntEnum):
     AWGN = 0

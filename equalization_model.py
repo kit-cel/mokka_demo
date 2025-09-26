@@ -165,7 +165,7 @@ class EqualizerSimulation:
             var_est = torch.empty(self.pol, self.m_max, dtype=torch.float32, requires_grad=False)
 
             # print(eq.butterfly_backward.taps)
-            out, out_q = self.eqVAE(torch.complex(rx_tensor[:, 0, :], rx_tensor[:, 1, :]))
+            out, out_q, _var, _loss = self.eqVAE(torch.complex(rx_tensor[:, 0, :], rx_tensor[:, 1, :]))
 
         out_const[:, 0, :], out_const[:, 1, :] = (
             out.real.detach().clone(),
